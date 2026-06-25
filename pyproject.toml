@@ -7,7 +7,11 @@ requires-python = ">=3.10"
 dependencies = ["httpx", "pydantic>=2"]
 
 [dependency-groups]
-dev = ["ruff", "ty", "pre-commit"]
+dev = ["ruff", "ty", "pre-commit", "datamodel-code-generator"]
+
+[tool.ty.src]
+# Generated code — validated by pydantic at runtime; call sites are still type-checked.
+exclude = ["lighton/types/api/**"]
 
 [build-system]
 requires = ["setuptools>=61"]
