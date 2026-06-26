@@ -7,7 +7,17 @@ requires-python = ">=3.10"
 dependencies = ["httpx", "pydantic>=2"]
 
 [dependency-groups]
-dev = ["ruff", "ty", "pre-commit", "datamodel-code-generator"]
+dev = [
+    "ruff",
+    "ty",
+    "pre-commit",
+    "datamodel-code-generator",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+# Import the source tree directly, independent of the editable-install finder.
+pythonpath = ["."]
 
 [tool.ty.src]
 # Generated code — validated by pydantic at runtime; call sites are still type-checked.

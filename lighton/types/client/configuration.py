@@ -5,8 +5,7 @@ from __future__ import annotations
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-# ponytail: guess — until the real host/version is confirmed.
-DEFAULT_BASE_URL = "https://api.lighton.ai/v3"
+DEFAULT_BASE_URL = "https://api.lighton.ai"
 
 
 def _default_timeout() -> httpx.Timeout:

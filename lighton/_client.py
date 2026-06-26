@@ -12,8 +12,8 @@ from typing import Any
 
 import httpx
 
-from . import exceptions as exc
-from .types import LightOnConfiguration
+from lighton import exceptions as exc
+from lighton.types import LightOnConfiguration
 
 
 class LightOn:
@@ -61,19 +61,19 @@ class LightOn:
         return response.json() if response.content else None
 
     # --- primary verbs -----------------------------------------------------
-    # ponytail: paths/payloads are placeholders and return raw dicts for now.
-    # Wrap returns in pydantic models from lighton.types once that submodule lands.
+    # ponytail: payloads return raw dicts for now.
+    # Wrap returns in pydantic models from lighton.types.api once you curate them.
     def ask(self, **payload: Any) -> Any:
-        return self._request("POST", "/ask", json=payload)
+        return self._request("POST", "/api/v3/ask", json=payload)
 
     def search(self, **payload: Any) -> Any:
-        return self._request("POST", "/search", json=payload)
+        return self._request("POST", "/api/v3/search", json=payload)
 
     def parse(self, **payload: Any) -> Any:
-        return self._request("POST", "/parse", json=payload)
+        return self._request("POST", "/api/v3/parse", json=payload)
 
     def extract(self, **payload: Any) -> Any:
-        return self._request("POST", "/extract", json=payload)
+        return self._request("POST", "/api/v3/extract", json=payload)
 
 
 if __name__ == "__main__":

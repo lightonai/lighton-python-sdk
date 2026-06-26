@@ -9,3 +9,11 @@ repos:
     rev: v0.0.53  # set by `pre-commit autoupdate`
     hooks:
       - id: ty
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        pass_filenames: false  # run the whole suite, not just changed files
+        always_run: true

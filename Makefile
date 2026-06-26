@@ -1,5 +1,9 @@
 SCHEMA_URL = https://api.lighton.ai/docs/schema/
 
+.PHONY: test
+test:  ## Run the test suite
+	uv run pytest
+
 .PHONY: gen-types
 gen-types:  ## Regenerate pydantic models from the LightOn OpenAPI schema
 	mkdir -p lighton/types/api

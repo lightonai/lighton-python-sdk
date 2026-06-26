@@ -1,3 +1,3 @@
-from .client import LightOnConfiguration
+from lighton.types.client import LightOnConfiguration
 
 __all__ = ["LightOnConfiguration"]
