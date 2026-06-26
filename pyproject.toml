@@ -15,6 +15,12 @@ dev = [
     "pytest>=9.1.1",
 ]
 
+[tool.uv]
+# Supply-chain quarantine: ignore any distribution uploaded in the last 3 days,
+# so freshly-published (possibly compromised) versions aren't picked up until vetted.
+# Rolling window — each `uv lock` advances the cutoff.
+exclude-newer = "3 days ago"
+
 [tool.pytest.ini_options]
 # Import the source tree directly, independent of the editable-install finder.
 pythonpath = ["."]
