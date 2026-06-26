@@ -74,25 +74,3 @@ class LightOn:
 
     def extract(self, **payload: Any) -> Any:
         return self._request("POST", "/api/v3/extract", json=payload)
-
-
-if __name__ == "__main__":
-    # Self-check: error mapping, no network (httpx MockTransport).
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/boom"):
-            return httpx.Response(401, json={"detail": "bad key"})
-        return httpx.Response(200, json={"ok": True})
-
-    c = LightOn(
-        "k", config=LightOnConfiguration(transport=httpx.MockTransport(handler))
-    )
-
-    assert c.ask(q="hi") == {"ok": True}
-
-    try:
-        c._request("GET", "/boom")
-        raise AssertionError("expected AuthenticationError")
-    except exc.AuthenticationError as e:
-        assert e.status_code == 401
-
-    print("ok")
