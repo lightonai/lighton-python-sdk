@@ -15,6 +15,7 @@ lighton/
   _client.py         # LightOn client: httpx wrapper, _request, primary verbs
   exceptions.py      # exception tree
   workspace.py       # Workspace — data + behavior (active-record), lives at root
+  apikey.py          # ApiKey / ApiKeyScope — active-record, lives at root
   types/             # PURE DATA schemas only (no behavior)
     client/configuration.py   # LightOnConfiguration
     api/__init__.py           # GENERATED pydantic models (do not hand-edit)
@@ -52,7 +53,14 @@ Chosen pattern (user preference) for `Workspace`, over a resource-manager:
 - `list()` follows pagination fully — no silent truncation.
 - Curated schema is **independent of the generated api types** (`extra="ignore"` drops noisy response fields). Hand-written models give stable, clean DX; generated ones are ugly and get regenerated.
 
+`ApiKey` follows the same shape. Its one nuance: the plaintext secret (`key`) is
+returned only by `create()`, once — `_absorb` only overwrites fields present in the
+response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
+
 If adding new resources, follow the same active-record shape for consistency.
+**Currently the plumbing is duplicated between `workspace.py` and `apikey.py`** (two
+copies) — a deliberate choice over a shared base. Extract a shared `_ActiveRecord`
+base only when a **third** resource appears; two copies is below the abstraction threshold.
 
 ## Generated types
 

@@ -43,3 +43,29 @@ ws = Workspace.get(client, ws.id)
 ws.delete()
 ```
 
+## API keys
+
+Same active-record style. The plaintext secret is available **only** right after `create()`.
+
+```python
+from lighton import LightOn, ApiKey, ApiKeyScope
+
+client = LightOn()
+
+key = ApiKey(
+    name="ci-pipeline",
+    scopes=[ApiKeyScope(workspace_id=42, role="viewer")],  # omit for an unscoped key
+).create(client)
+
+print(key.key)  # plaintext secret — shown once, store it now
+
+# Manage existing keys
+for k in ApiKey.list(client):
+    print(k.id, k.name, k.prefix)
+
+key = ApiKey.get(client, key.id)
+key.name = "ci-pipeline-v2"
+key.save()
+key.delete()
+```
+
