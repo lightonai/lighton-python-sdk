@@ -1,0 +1,23 @@
+name: quarantine-guard
+
+# Fail the PR if it touches the supply-chain quarantine (exclude-newer in pyproject.toml).
+# Make this a required check in branch protection so the failure blocks merge.
+on:
+  pull_request:
+    paths: ["pyproject.toml"]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need base history to diff
+      - name: Reject edits to the quarantine
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          if git diff "$base" HEAD -- pyproject.toml | grep -qE '^[+-].*exclude-newer'; then
+            echo "::error file=pyproject.toml::Supply-chain quarantine (exclude-newer) was modified — security review required."
+            exit 1
+          fi
+          echo "Quarantine intact."
