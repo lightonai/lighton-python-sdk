@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from lighton.enums import FileStatus
 from lighton.exceptions import LightOnError
@@ -43,27 +43,61 @@ class File(BaseModel):
     # Response carries extra fields (workspace, summaries, content_types, …); ignore.
     model_config = ConfigDict(extra="ignore")
 
-    id: int | None = None  # None until created/retrieved
-    # Local source to upload; not part of any response, set before create().
-    path: Path | None = None
-    workspace_id: int | None = None  # required to create; Workspace.ingest() fills it
-    filename: str | None = None  # defaults to path.name on upload
-    title: str | None = None
-    parser: str | None = None
+    id: int | None = Field(
+        None, description="Server-assigned id; None until created/retrieved."
+    )
+    path: Path | None = Field(
+        None,
+        description="Local source file to upload; set before create(), never in a response.",
+    )
+    workspace_id: int | None = Field(
+        None,
+        description="Target workspace for upload; required to create (Workspace.ingest fills it).",
+    )
+    filename: str | None = Field(
+        None, description="Document filename; defaults to path.name on upload."
+    )
+    title: str | None = Field(
+        None, description="Document title; defaults to the filename server-side."
+    )
+    parser: str | None = Field(
+        None, description="Ingestion pipeline to use; platform default if omitted."
+    )
     # Read-only, populated from responses.
-    status: FileStatus | None = None
-    status_detail: str | None = None  # free-text error message, not a vocab
-    extension: str | None = None
-    total_pages: int | None = None
-    size: int | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
+    status: FileStatus | None = Field(
+        None, description="Ingestion pipeline status (read-only)."
+    )
+    status_detail: str | None = Field(
+        None, description="Free-text error detail, present only on failure (read-only)."
+    )
+    extension: str | None = Field(
+        None, description="File extension of the document (read-only)."
+    )
+    total_pages: int | None = Field(
+        None, description="Total page count of the document (read-only)."
+    )
+    size: int | None = Field(None, description="File size in bytes (read-only).")
+    created_at: datetime | None = Field(
+        None, description="Creation timestamp (read-only)."
+    )
+    updated_at: datetime | None = Field(
+        None, description="Last-update timestamp (read-only)."
+    )
 
     _client: LightOn | None = PrivateAttr(default=None)
 
     # --- class-level (no instance yet) -------------------------------------
     @classmethod
     def list(cls, client: LightOn, *, workspace_id: int | None = None) -> _list[File]:
+        """List files, following pagination to the end.
+
+        Args:
+            client: The client used to make the request and bind to each result.
+            workspace_id: Optional filter; omit to list files across all workspaces.
+
+        Returns:
+            The matching files, each bound to `client`.
+        """
         params = {"workspace_id": workspace_id} if workspace_id is not None else None
         items: _list[File] = []
         path: str | None = _BASE
@@ -76,11 +110,31 @@ class File(BaseModel):
 
     @classmethod
     def get(cls, client: LightOn, id: int) -> File:
+        """Fetch a single file by id.
+
+        Args:
+            client: The client used to make the request and bind to the result.
+            id: The file id to retrieve.
+
+        Returns:
+            The file, bound to `client`.
+        """
         return cls._bind(client, client._request("GET", f"{_BASE}/{id}"))
 
     # --- instance lifecycle ------------------------------------------------
     def create(self, client: LightOn, *, tags: _list[int] | None = None) -> File:
-        """Upload the file (multipart) — this starts ingestion."""
+        """Upload the file (multipart) — this starts ingestion.
+
+        Args:
+            client: The client to upload with and bind to `self`.
+            tags: Optional tag ids to assign to the document on upload.
+
+        Returns:
+            `self`, updated with the server-assigned id and initial status.
+
+        Raises:
+            ValueError: If `path` or `workspace_id` is not set.
+        """
         if self.path is None:
             raise ValueError("File.path is required to upload")
         if self.workspace_id is None:
@@ -103,15 +157,25 @@ class File(BaseModel):
         return self._absorb(resp)
 
     def save(self) -> File:
-        """Persist local edits to title (PATCH). filename is immutable server-side."""
+        """Persist local edits to title (PATCH). filename is immutable server-side.
+
+        Returns:
+            `self`, refreshed with the server's response.
+        """
         return self._absorb(
             self._api("PATCH", f"{_BASE}/{self.id}", json={"title": self.title})
         )
 
     def refresh(self) -> File:
+        """Re-fetch this file from the API (GET) — use to poll ingestion status.
+
+        Returns:
+            `self`, updated with the latest field values (including `status`).
+        """
         return self._absorb(self._api("GET", f"{_BASE}/{self.id}"))
 
     def delete(self) -> None:
+        """Delete this file and clear its local id."""
         self._api("DELETE", f"{_BASE}/{self.id}")
         self.id = None
 
@@ -120,6 +184,17 @@ class File(BaseModel):
 
         ponytail: dumb poll loop — the API offers no webhook. Run in a thread
         (or use wait_all) for concurrency; the SDK stays sync.
+
+        Args:
+            timeout: Max seconds to wait before raising TimeoutError.
+            poll: Seconds to sleep between status checks.
+
+        Returns:
+            `self`, once `status` is a terminal-success state (embedded/parsed).
+
+        Raises:
+            TimeoutError: If `timeout` elapses before a terminal status.
+            LightOnError: If ingestion ends in a terminal-failure state.
         """
         deadline = time.monotonic() + timeout
         while self.status not in _TERMINAL_OK and self.status not in _TERMINAL_BAD:
@@ -158,6 +233,18 @@ class File(BaseModel):
 
 
 def wait_all(files: _list[File], timeout: float = 300.0) -> _list[File]:
-    """Wait for many ingestions concurrently (threads, not async — sync SDK)."""
+    """Wait for many ingestions concurrently (threads, not async — sync SDK).
+
+    Args:
+        files: The files to wait on; each is polled via File.wait.
+        timeout: Max seconds to wait per file before that wait raises TimeoutError.
+
+    Returns:
+        The same files, once each has reached a terminal-success status.
+
+    Raises:
+        TimeoutError: If any file does not finish within `timeout`.
+        LightOnError: If any file's ingestion ends in a terminal-failure state.
+    """
     with ThreadPoolExecutor() as ex:
         return list(ex.map(lambda f: f.wait(timeout), files))

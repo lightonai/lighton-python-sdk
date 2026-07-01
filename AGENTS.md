@@ -104,3 +104,15 @@ only the read-side is truly identical. Extract a shared `_ActiveRecord` base whe
 - **uv.lock**: re-stage it after any dependency change before committing, or the ty pre-commit hook (which runs through `uv` and re-resolves) will report a lockfile modification and fail the commit.
 - New deps: prefer stdlib → installed dep → a few lines, before adding anything. Mark deliberate simplifications with `ponytail:` comments.
 - Non-trivial logic leaves one runnable test behind.
+- **Docstrings (public API)**: every public function/method has a docstring documenting
+  each argument and the return value (Google-style `Args:`/`Returns:`, plus `Raises:`
+  when it raises deliberately). `self`/`cls` are omitted. Private helpers (`_`-prefixed)
+  and self-evident one-liners are exempt — don't pad them. Keep it about behavior and
+  contract, not a restatement of the signature.
+- **Model fields**: every field on a hand-written pydantic model carries a
+  `Field(description=...)` — the description is the field's documentation (drives IDE
+  hints, JSON schema, and generated docs). Use `Field` keyword args for the default too
+  (`Field(None, description=...)`, `Field(default_factory=list, description=...)`); don't
+  mix a bare default with a `Field`. This applies to the curated schemas at the package
+  root, NOT the generated `types/api/` (regenerated) — those already carry descriptions
+  from the OpenAPI schema.

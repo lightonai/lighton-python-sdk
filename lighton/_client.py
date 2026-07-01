@@ -64,13 +64,45 @@ class LightOn:
     # ponytail: payloads return raw dicts for now.
     # Wrap returns in pydantic models from lighton.types.api once you curate them.
     def ask(self, **payload: Any) -> Any:
+        """POST /api/v3/ask — ask a grounded question over indexed documents.
+
+        Args:
+            **payload: Request body fields (e.g. `query`, `workspace_ids`).
+
+        Returns:
+            The parsed JSON response.
+        """
         return self._request("POST", "/api/v3/ask", json=payload)
 
     def search(self, **payload: Any) -> Any:
+        """POST /api/v3/search — retrieve relevant passages (no generation).
+
+        Args:
+            **payload: Request body fields (e.g. `query`, `workspace_ids`, `file_id`).
+
+        Returns:
+            The parsed JSON response.
+        """
         return self._request("POST", "/api/v3/search", json=payload)
 
     def parse(self, **payload: Any) -> Any:
+        """POST /api/v3/parse — parse a document into per-page text.
+
+        Args:
+            **payload: Request body fields (e.g. the document and parse options).
+
+        Returns:
+            The parsed JSON response.
+        """
         return self._request("POST", "/api/v3/parse", json=payload)
 
     def extract(self, **payload: Any) -> Any:
+        """POST /api/v3/extract — extract structured data from a document.
+
+        Args:
+            **payload: Request body fields (e.g. the document and extraction schema).
+
+        Returns:
+            The parsed JSON response.
+        """
         return self._request("POST", "/api/v3/extract", json=payload)

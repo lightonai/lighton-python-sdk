@@ -12,7 +12,7 @@ from builtins import list as _list
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
@@ -25,22 +25,42 @@ class Workspace(BaseModel):
     # Response carries extra fields (summaries, sync, scoped_api_keys); ignore them.
     model_config = ConfigDict(extra="ignore")
 
-    id: int | None = None  # None until created/retrieved
-    name: str
-    description: str = ""
+    id: int | None = Field(
+        None, description="Server-assigned id; None until created/retrieved."
+    )
+    name: str = Field(description="Workspace display name.")
+    description: str = Field("", description="Free-text workspace description.")
     # Read-only, populated from responses.
-    workspace_type: str | None = None
-    document_upload_method: str | None = None
-    files_count: int | None = None
-    used_storage: float | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
+    workspace_type: str | None = Field(None, description="Workspace type (read-only).")
+    document_upload_method: str | None = Field(
+        None, description="How documents are uploaded to this workspace (read-only)."
+    )
+    files_count: int | None = Field(
+        None, description="Number of files in the workspace (read-only)."
+    )
+    used_storage: float | None = Field(
+        None, description="Bytes of storage used (read-only)."
+    )
+    created_at: datetime | None = Field(
+        None, description="Creation timestamp (read-only)."
+    )
+    updated_at: datetime | None = Field(
+        None, description="Last-update timestamp (read-only)."
+    )
 
     _client: LightOn | None = PrivateAttr(default=None)
 
     # --- class-level (no instance yet) -------------------------------------
     @classmethod
     def list(cls, client: LightOn) -> _list[Workspace]:
+        """List every workspace, following pagination to the end.
+
+        Args:
+            client: The client used to make the request and bind to each result.
+
+        Returns:
+            All workspaces the caller can see, each bound to `client`.
+        """
         items: list[Workspace] = []
         path: str | None = _BASE
         while path:  # follow pagination — no silent truncation
@@ -51,10 +71,27 @@ class Workspace(BaseModel):
 
     @classmethod
     def get(cls, client: LightOn, id: int) -> Workspace:
+        """Fetch a single workspace by id.
+
+        Args:
+            client: The client used to make the request and bind to the result.
+            id: The workspace id to retrieve.
+
+        Returns:
+            The workspace, bound to `client`.
+        """
         return cls._bind(client, client._request("GET", f"{_BASE}/{id}"))
 
     # --- instance lifecycle ------------------------------------------------
     def create(self, client: LightOn) -> Workspace:
+        """Create this workspace and bind the client for later lifecycle calls.
+
+        Args:
+            client: The client to create the workspace with and bind to `self`.
+
+        Returns:
+            `self`, updated with the server-assigned id and read-only fields.
+        """
         data = client._request(
             "POST", _BASE, json={"name": self.name, "description": self.description}
         )
@@ -62,7 +99,11 @@ class Workspace(BaseModel):
         return self._absorb(data)
 
     def save(self) -> Workspace:
-        """Persist local edits to name/description (PATCH)."""
+        """Persist local edits to name/description (PATCH).
+
+        Returns:
+            `self`, refreshed with the server's response.
+        """
         data = self._api(
             "PATCH",
             f"{_BASE}/{self.id}",
@@ -81,8 +122,23 @@ class Workspace(BaseModel):
         timeout: float = 300.0,
         tags: _list[int] | None = None,
     ) -> File:
-        """Upload a File into this workspace and return it. Non-blocking by default;
-        the returned File is 'pending' — refresh()/wait() to track ingestion."""
+        """Upload a File into this workspace — uploading is the ingestion.
+
+        Non-blocking by default: the returned File is 'pending', poll it via
+        refresh()/wait(). Pass wait=True to block until ingestion is terminal.
+
+        Args:
+            file: The File to upload; its workspace_id is set to this workspace.
+            wait: If True, block until ingestion reaches a terminal status.
+            timeout: Seconds to wait when wait=True before raising TimeoutError.
+            tags: Optional tag ids to assign to the document on upload.
+
+        Returns:
+            The created File, bound to this workspace's client.
+
+        Raises:
+            ValueError: If this workspace has not been created/retrieved yet.
+        """
         if self.id is None or self._client is None:
             raise ValueError("workspace must be created or retrieved first")
         file.workspace_id = self.id
@@ -90,9 +146,15 @@ class Workspace(BaseModel):
         return created.wait(timeout) if wait else created
 
     def refresh(self) -> Workspace:
+        """Re-fetch this workspace from the API (GET).
+
+        Returns:
+            `self`, updated with the latest field values.
+        """
         return self._absorb(self._api("GET", f"{_BASE}/{self.id}"))
 
     def delete(self) -> None:
+        """Delete this workspace and clear its local id."""
         self._api("DELETE", f"{_BASE}/{self.id}")
         self.id = None
 
