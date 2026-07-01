@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
-from lighton import ApiKey, ApiKeyScope, LightOn, LightOnConfiguration
+from lighton import ApiKey, ApiKeyScope, LightOn, LightOnConfiguration, Role
 from lighton.apikey import _BASE
 
 
@@ -84,7 +84,7 @@ def test_create_serializes_scopes_and_expiry():
     ApiKey(
         name="ci",
         expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
-        scopes=[ApiKeyScope(workspace_id=3, role="viewer")],
+        scopes=[ApiKeyScope(workspace_id=3, role=Role.viewer)],
     ).create(client)
 
     assert sent["body"]["scopes"] == [{"workspace_id": 3, "role": "viewer"}]

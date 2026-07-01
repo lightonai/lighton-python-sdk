@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
+    from lighton.file import File
 
 _BASE = "/api/v3/workspaces"
 
@@ -71,6 +72,22 @@ class Workspace(BaseModel):
             },
         )
         return self._absorb(data)
+
+    def ingest(
+        self,
+        file: File,
+        *,
+        wait: bool = False,
+        timeout: float = 300.0,
+        tags: _list[int] | None = None,
+    ) -> File:
+        """Upload a File into this workspace and return it. Non-blocking by default;
+        the returned File is 'pending' — refresh()/wait() to track ingestion."""
+        if self.id is None or self._client is None:
+            raise ValueError("workspace must be created or retrieved first")
+        file.workspace_id = self.id
+        created = file.create(self._client, tags=tags)
+        return created.wait(timeout) if wait else created
 
     def refresh(self) -> Workspace:
         return self._absorb(self._api("GET", f"{_BASE}/{self.id}"))

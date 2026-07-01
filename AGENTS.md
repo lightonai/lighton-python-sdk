@@ -16,6 +16,8 @@ lighton/
   exceptions.py      # exception tree
   workspace.py       # Workspace — data + behavior (active-record), lives at root
   apikey.py          # ApiKey / ApiKeyScope — active-record, lives at root
+  file.py            # File — active-record + wait_all(); upload = ingestion
+  enums.py           # curated StrEnum vocabularies (FileStatus, Role) shared by resources
   types/             # PURE DATA schemas only (no behavior)
     client/configuration.py   # LightOnConfiguration
     api/__init__.py           # GENERATED pydantic models (do not hand-edit)
@@ -25,6 +27,15 @@ Makefile             # make test, make gen-types
 
 Rule: `types/` holds pure pydantic data schemas. Anything with logic/behavior
 (like `Workspace`) goes at the package root, not under `types/`.
+
+`enums.py` holds hand-curated controlled vocabularies (`FileStatus`, `Role`) used as
+model field types. **`StrEnum`, not `Enum`** — members are strings, so `f.status ==
+"embedded"` and set-membership keep working without `.value`, and pydantic
+serializes them back to plain strings for request bodies. Values mirror the generated
+api enums (`StatusEnum`/`RoleEnum`); if the server vocab changes, `make gen-types`
+surfaces it and you update `enums.py` by hand. Only enum a field whose full domain is
+known — `workspace_type`/`document_upload_method` stay `str` (plain `str` in the schema
+too, no documented value set).
 
 ## Client
 
@@ -57,10 +68,24 @@ Chosen pattern (user preference) for `Workspace`, over a resource-manager:
 returned only by `create()`, once — `_absorb` only overwrites fields present in the
 response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
 
+`File` follows the same shape with two divergences:
+- **`create()` is a multipart upload** (`files=`/`data=`), not a JSON body — uploading
+  a file to a workspace IS the ingestion. The returned File carries a processing
+  `status`; poll it via `refresh()`/`wait()`. There is **no separate ingestion-job
+  resource** — the File is the job, so we don't model one.
+- `wait()` blocks on a `time.sleep` poll loop until a terminal status (sync SDK; no
+  webhook exists). Ingestion is **non-blocking by default** — `Workspace.ingest(file)`
+  and `File.create()` return immediately with status `pending`; only `wait=True` /
+  `wait()` block. `wait_all()` (module-level, `ThreadPoolExecutor`) waits on many at once.
+- `tags` is a `create()` **argument**, not a model field — the response returns tags as
+  objects (not the `list[int]` the request takes), which would clash on `_absorb`.
+
 If adding new resources, follow the same active-record shape for consistency.
-**Currently the plumbing is duplicated between `workspace.py` and `apikey.py`** (two
-copies) — a deliberate choice over a shared base. Extract a shared `_ActiveRecord`
-base only when a **third** resource appears; two copies is below the abstraction threshold.
+**The list/get/_bind/_absorb/_api plumbing is now duplicated across `workspace.py`,
+`apikey.py`, and `file.py`** — still a deliberate choice over a shared base, because
+`File.create` (multipart) and `ApiKey`'s one-time-secret `_absorb` diverge enough that
+only the read-side is truly identical. Extract a shared `_ActiveRecord` base when a
+**fourth** resource lands or the copies start drifting in the shared parts.
 
 ## Generated types
 

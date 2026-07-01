@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from lighton.enums import Role
+
 if TYPE_CHECKING:
     from lighton._client import LightOn
 
@@ -23,7 +25,7 @@ class ApiKeyScope(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     workspace_id: int
-    role: str  # "viewer" | "editor" | "owner"
+    role: Role
 
 
 class ApiKey(BaseModel):
