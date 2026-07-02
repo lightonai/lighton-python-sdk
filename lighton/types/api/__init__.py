@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field, RootModel
+from enum import Enum, StrEnum
 from typing import Annotated, Any
-from enum import Enum
 from uuid import UUID
+
+from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field, RootModel
 
 
 class APIKeyScope(BaseModel):
@@ -23,6 +24,29 @@ class APIKeyV3Response(BaseModel):
     created_at: AwareDatetime
     expires_at: AwareDatetime | None
     scopes: list[APIKeyScope]
+
+
+class APIV3BatchErrorResponse(BaseModel):
+    id: Annotated[
+        str | None,
+        Field(
+            description="Job/resource id when one already exists (useful for async error diagnosis); null otherwise."
+        ),
+    ]
+    code: Annotated[int, Field(description="HTTP status code")]
+    error: Annotated[
+        str, Field(description="Error code used by the UI as a translation key")
+    ]
+    detail: Annotated[
+        str, Field(description="Human-readable error message for developers")
+    ]
+    doc_url: Annotated[
+        str, Field(description="Link to the error-code documentation page")
+    ]
+    index: Annotated[
+        int | None,
+        Field(description="0-based position of the failing action in the batch."),
+    ] = None
 
 
 class APIV3ErrorResponse(BaseModel):
@@ -72,6 +96,74 @@ class APIV3ValidationErrorResponse(BaseModel):
         dict[str, list[APIV3FieldError]] | None,
         Field(description="Field-level validation errors keyed by field name"),
     ] = None
+
+
+class AskRequest(BaseModel):
+    """
+    DRF serializer mixin providing ``content_type`` and ``attribute`` fields.
+
+    Compose into any request serializer via multiple inheritance::
+
+        class SearchRequestSerializer(FacetFilterFieldsMixin, serializers.Serializer):
+            query = serializers.CharField(...)
+            # content_type and attribute inherited from the mixin
+    """
+
+    content_type: Annotated[
+        list[str] | None,
+        Field(
+            description="Filter by content type path. Multiple values are OR. Exact-or-subtree matching by default (e.g. `legal` matches legal, legal:contract). Wildcards: `*contract*` (contains), `legal:contract*` (prefix)."
+        ),
+    ] = None
+    attribute: Annotated[
+        list[str] | None,
+        Field(
+            description="Filter by attribute value. **Repeated `attribute` entries are ANDed; values inside one entry are ORed with `|`** (pipe is the recommended OR delimiter — comma also works but can be ambiguous with multi-key values). Example: `attribute=fiscal_year:2024|2025&attribute=status:active` → (fiscal_year 2024 OR 2025) AND (status active). Formats: `name` (has any value), `name:value` (exact), `name:>value` / `name:>=value` (gt/gte), `name:<value` / `name:<=value` (lt/lte), `name:prefix*` (starts with, case-insensitive), `name:*text*` (contains, case-insensitive), `name:a|b` (OR). Smart dates: `filing_date:2023` (year), `filing_date:2023-06` (month). Type-aware: booleans (true/false), multi-select (membership check). Scoped: `content_type(legal:compliance).regulation:AML`."
+        ),
+    ] = None
+    query: Annotated[
+        str,
+        Field(
+            description="Natural-language question. Maximum 1500 characters.",
+            max_length=1500,
+        ),
+    ]
+    max_results: Annotated[
+        int | None,
+        Field(
+            description="Maximum number of chunks to retrieve for context. Range: 1–50.",
+            ge=1,
+            le=50,
+        ),
+    ] = 10
+    workspace_id: Annotated[
+        list[int] | None,
+        Field(
+            description="Restrict search to these workspace IDs. Cannot combine with file_id."
+        ),
+    ] = None
+    tag_id: Annotated[
+        list[int] | None,
+        Field(
+            description="Restrict to documents carrying any of these tag IDs (OR). Cannot combine with file_id."
+        ),
+    ] = None
+    file_id: Annotated[
+        list[int] | None,
+        Field(
+            description="Restrict to specific file IDs. Cannot combine with workspace_id or tag_id."
+        ),
+    ] = None
+    stream: Annotated[
+        bool | None,
+        Field(description="When true, response is streamed as Server-Sent Events."),
+    ] = False
+    model: Annotated[
+        str | None,
+        Field(
+            description="LLM used for answer generation. Standard values:\n- `mistral-large-latest`: Mistral Large 2 — flagship general-purpose model. Best answer quality (default).\n- `alfred-ft5`: Alfred FT5 — LightOn fine-tuned model, lighter and faster for straightforward questions.\nCustom model technical names (e.g. `custom-{company_id}-{uuid}`) are also accepted."
+        ),
+    ] = "mistral-large-latest"
 
 
 class AttributeDefResponse(BaseModel):
@@ -139,6 +231,11 @@ class AttributeValueResponse(BaseModel):
     content_type_path: Annotated[str, Field(title="Content Type Path")]
 
 
+class BatchResultItem(BaseModel):
+    status: Annotated[int, Field(title="Status")]
+    data: Annotated[dict[str, Any] | None, Field(title="Data")] = None
+
+
 class BlankEnum(Enum):
     field_ = ""
 
@@ -147,7 +244,7 @@ class CommonErrorResponse(BaseModel):
     error: str
 
 
-class ContentTypeActionRequestActionEnum(Enum):
+class ContentTypeActionRequestActionEnum(StrEnum):
     adopt = "adopt"
     define_content_type = "define_content_type"
     undefine_content_type = "undefine_content_type"
@@ -225,6 +322,45 @@ class CreatedBy(BaseModel):
     first_name: Annotated[str, Field(description="First name")]
     last_name: Annotated[str, Field(description="Last name")]
     username: Annotated[str, Field(description="Username")]
+
+
+class CustomMLModelCreateRequest(BaseModel):
+    name: Annotated[str, Field(description="Display name, unique within the company.")]
+    litellm_model: Annotated[
+        str,
+        Field(
+            description="LiteLLM model string, e.g. 'openai/gpt-4-turbo' or 'azure/my-deployment'."
+        ),
+    ]
+    model_type: Annotated[
+        str | None,
+        Field(
+            description="Model type (e.g. 'Large Language Model', 'Embedding Model')."
+        ),
+    ] = "Large Language Model"
+    endpoint: Annotated[
+        str | None, Field(description="Custom API base URL (api_base in LiteLLM).")
+    ] = None
+    api_key: Annotated[
+        str | None, Field(description="API key for the custom model endpoint.")
+    ] = None
+
+
+class CustomMLModelResponse(BaseModel):
+    id: Annotated[UUID, Field(description="Unique ID for this custom model.")]
+    name: Annotated[str, Field(description="Display name, unique within the company.")]
+    technical_name: Annotated[
+        str, Field(description="LiteLLM identifier (custom-{uuid}).")
+    ]
+    litellm_model: Annotated[
+        str, Field(description="LiteLLM model string, e.g. 'openai/gpt-4-turbo'.")
+    ]
+    model_type: Annotated[str, Field(description="Model type.")]
+    endpoint: Annotated[str | None, Field(description="Custom API base URL.")] = None
+    enabled: Annotated[bool, Field(description="Whether the model is active.")]
+    is_default: Annotated[
+        bool, Field(description="Whether this is the company's default custom model.")
+    ]
 
 
 class DocumentAttributesListResponse(BaseModel):
@@ -425,7 +561,7 @@ class FileCreateRequestSerializerV3(BaseModel):
     ] = None
 
 
-class FileFacetActionRequestActionEnum(Enum):
+class FileFacetActionRequestActionEnum(StrEnum):
     classify = "classify"
     unclassify = "unclassify"
     set_value = "set_value"
@@ -462,7 +598,7 @@ class JobProgress(BaseModel):
     pages_processed: Annotated[int, Field(title="Pages Processed")]
 
 
-class KindEnum(Enum):
+class KindEnum(StrEnum):
     """
     * `library` - library
     * `folder` - folder
@@ -472,7 +608,7 @@ class KindEnum(Enum):
     folder = "folder"
 
 
-class LanguageEnum(Enum):
+class LanguageEnum(StrEnum):
     """
     * `en` - English
     * `fr` - French
@@ -500,7 +636,25 @@ class LanguageEnum(Enum):
     ko = "ko"
 
 
-class ModeEnum(Enum):
+class MLModelHealth(BaseModel):
+    is_healthy: Annotated[
+        bool, Field(description="Whether the model is healthy and available")
+    ]
+    last_checked_at: Annotated[
+        AwareDatetime | None, Field(description="Timestamp of the last health check")
+    ]
+
+
+class MLModelToAliasMapping(BaseModel):
+    alias_id: Annotated[UUID, Field(description="ID of the alias")]
+    alias_name: Annotated[str, Field(description="Name of the alias")]
+    alias_technical_name: Annotated[
+        str,
+        Field(description="Company-wide unique technical name for this model alias"),
+    ]
+
+
+class ModeEnum(StrEnum):
     """
     * `text` - text
     * `vision` - vision
@@ -510,14 +664,18 @@ class ModeEnum(Enum):
     vision = "vision"
 
 
-class ModelEnum(Enum):
+class ModelTypeEnum(StrEnum):
     """
-    * `mistral-large-latest` - mistral-large-latest
-    * `alfred-ft5` - alfred-ft5
+    * `Large Language Model` - Large Language Model
+    * `Embedding Model` - Embedding Model
+    * `Vision Language Model` - Vision Language Model
+    * `Multi-Vector Model` - Multi-Vector Model
     """
 
-    mistral_large_latest = "mistral-large-latest"
-    alfred_ft5 = "alfred-ft5"
+    Large_Language_Model = "Large Language Model"
+    Embedding_Model = "Embedding Model"
+    Vision_Language_Model = "Vision Language Model"
+    Multi_Vector_Model = "Multi-Vector Model"
 
 
 class Page(BaseModel):
@@ -655,6 +813,24 @@ class ParseUsage(BaseModel):
     pages_processed: int
 
 
+class PatchedCustomMLModelUpdateRequest(BaseModel):
+    name: Annotated[
+        str | None, Field(description="Display name, unique within the company.")
+    ] = None
+    endpoint: Annotated[
+        str | None, Field(description="Custom API base URL (api_base in LiteLLM).")
+    ] = None
+    api_key: Annotated[
+        str | None, Field(description="API key for the custom model endpoint.")
+    ] = None
+    is_default: Annotated[
+        bool | None,
+        Field(
+            description="Set to true to mark this as the company's default custom model."
+        ),
+    ] = None
+
+
 class PatchedFileUpdateRequestSerializerV3(BaseModel):
     """
     Request serializer for PATCH /api/v3/files/{id} endpoint.
@@ -685,7 +861,7 @@ class PatchedFileUpdateRequestSerializerV3(BaseModel):
     ] = None
 
 
-class RelevanceScoringEnum(Enum):
+class RelevanceScoringEnum(StrEnum):
     """
     * `none` - none
     * `scoring_only` - scoring_only
@@ -697,7 +873,7 @@ class RelevanceScoringEnum(Enum):
     scoring_and_filtering = "scoring_and_filtering"
 
 
-class RoleEnum(Enum):
+class RoleEnum(StrEnum):
     """
     * `viewer` - viewer
     * `editor` - editor
@@ -777,7 +953,7 @@ class SearchRequest(BaseModel):
     attribute: Annotated[
         list[str] | None,
         Field(
-            description="Filter by attribute value. **Repeated `attribute` entries are ANDed; values inside one entry are ORed with `|`** (pipe is the recommended OR delimiter — comma also works but can be ambiguous with multi-key values). Example: `attribute=fiscal_year:2024|2025&attribute=status:active` → (fiscal_year 2024 OR 2025) AND (status active). Formats: `name` (has any value), `name:value` (exact), `name:>value` / `name:>=value` (gt/gte), `name:<value` / `name:<=value` (lt/lte), `name:prefix*` (starts with), `name:a|b` (OR). Smart dates: `filing_date:2023` (year), `filing_date:2023-06` (month). Type-aware: booleans (true/false), multi-select (membership check). Scoped: `content_type(legal:compliance).regulation:AML`."
+            description="Filter by attribute value. **Repeated `attribute` entries are ANDed; values inside one entry are ORed with `|`** (pipe is the recommended OR delimiter — comma also works but can be ambiguous with multi-key values). Example: `attribute=fiscal_year:2024|2025&attribute=status:active` → (fiscal_year 2024 OR 2025) AND (status active). Formats: `name` (has any value), `name:value` (exact), `name:>value` / `name:>=value` (gt/gte), `name:<value` / `name:<=value` (lt/lte), `name:prefix*` (starts with, case-insensitive), `name:*text*` (contains, case-insensitive), `name:a|b` (OR). Smart dates: `filing_date:2023` (year), `filing_date:2023-06` (month). Type-aware: booleans (true/false), multi-select (membership check). Scoped: `content_type(legal:compliance).regulation:AML`."
         ),
     ] = None
     query: Annotated[
@@ -883,6 +1059,16 @@ class SearchWorkspace(BaseModel):
     name: Annotated[str, Field(description="Workspace name.")]
 
 
+class SourceEnum(StrEnum):
+    """
+    * `managed` - managed
+    * `custom` - custom
+    """
+
+    managed = "managed"
+    custom = "custom"
+
+
 class StandardWorkspaceCreateV3Request(BaseModel):
     """
     V3 Request serializer for creating a workspace in the user's company.
@@ -892,14 +1078,14 @@ class StandardWorkspaceCreateV3Request(BaseModel):
     description: str | None = ""
 
 
-class StandardWorkspaceDatasourceV3RequestTypeEnum(Enum):
+class StandardWorkspaceDatasourceV3RequestTypeEnum(StrEnum):
     googledrive = "googledrive"
     sharepoint = "sharepoint"
     servicenow = "servicenow"
     webscrapper = "webscrapper"
 
 
-class StatusEnum(Enum):
+class StatusEnum(StrEnum):
     """
     * `pending` - Pending
     * `pending_conversion` - Pending Conversion
@@ -927,7 +1113,7 @@ class StatusEnum(Enum):
     updating = "updating"
 
 
-class StatusVisionEnum(Enum):
+class StatusVisionEnum(StrEnum):
     """
     * `pending` - Pending
     * `processing` - Processing
@@ -1000,7 +1186,7 @@ class TagListResponseSerializerV3(BaseModel):
     ]
 
 
-class UserRoleEnum(Enum):
+class UserRoleEnum(StrEnum):
     """
     * `owner` - owner
     * `editor` - editor
@@ -1013,7 +1199,7 @@ class UserRoleEnum(Enum):
     viewer = "viewer"
 
 
-class WorkspaceDatasourceBrowseV3RequestTypeEnum(Enum):
+class WorkspaceDatasourceBrowseV3RequestTypeEnum(StrEnum):
     googledrive = "googledrive"
     sharepoint = "sharepoint"
 
@@ -1105,7 +1291,7 @@ class FieldChunkScoresSchema(BaseModel):
     ]
 
 
-class FieldDatasourceConversionRequestTypeEnum(Enum):
+class FieldDatasourceConversionRequestTypeEnum(StrEnum):
     """
     * `servicenow` - servicenow
     * `googledrive` - googledrive
@@ -1128,72 +1314,8 @@ class APIKeyScopeRequest(BaseModel):
     role: RoleEnum
 
 
-class AskRequest(BaseModel):
-    """
-    DRF serializer mixin providing ``content_type`` and ``attribute`` fields.
-
-    Compose into any request serializer via multiple inheritance::
-
-        class SearchRequestSerializer(FacetFilterFieldsMixin, serializers.Serializer):
-            query = serializers.CharField(...)
-            # content_type and attribute inherited from the mixin
-    """
-
-    content_type: Annotated[
-        list[str] | None,
-        Field(
-            description="Filter by content type path. Multiple values are OR. Exact-or-subtree matching by default (e.g. `legal` matches legal, legal:contract). Wildcards: `*contract*` (contains), `legal:contract*` (prefix)."
-        ),
-    ] = None
-    attribute: Annotated[
-        list[str] | None,
-        Field(
-            description="Filter by attribute value. **Repeated `attribute` entries are ANDed; values inside one entry are ORed with `|`** (pipe is the recommended OR delimiter — comma also works but can be ambiguous with multi-key values). Example: `attribute=fiscal_year:2024|2025&attribute=status:active` → (fiscal_year 2024 OR 2025) AND (status active). Formats: `name` (has any value), `name:value` (exact), `name:>value` / `name:>=value` (gt/gte), `name:<value` / `name:<=value` (lt/lte), `name:prefix*` (starts with), `name:a|b` (OR). Smart dates: `filing_date:2023` (year), `filing_date:2023-06` (month). Type-aware: booleans (true/false), multi-select (membership check). Scoped: `content_type(legal:compliance).regulation:AML`."
-        ),
-    ] = None
-    query: Annotated[
-        str,
-        Field(
-            description="Natural-language question. Maximum 1500 characters.",
-            max_length=1500,
-        ),
-    ]
-    max_results: Annotated[
-        int | None,
-        Field(
-            description="Maximum number of chunks to retrieve for context. Range: 1–50.",
-            ge=1,
-            le=50,
-        ),
-    ] = 10
-    workspace_id: Annotated[
-        list[int] | None,
-        Field(
-            description="Restrict search to these workspace IDs. Cannot combine with file_id."
-        ),
-    ] = None
-    tag_id: Annotated[
-        list[int] | None,
-        Field(
-            description="Restrict to documents carrying any of these tag IDs (OR). Cannot combine with file_id."
-        ),
-    ] = None
-    file_id: Annotated[
-        list[int] | None,
-        Field(
-            description="Restrict to specific file IDs. Cannot combine with workspace_id or tag_id."
-        ),
-    ] = None
-    stream: Annotated[
-        bool | None,
-        Field(description="When true, response is streamed as Server-Sent Events."),
-    ] = False
-    model: Annotated[
-        ModelEnum | None,
-        Field(
-            description="LLM used for answer generation. Allowed values:\n- `mistral-large-latest`: Mistral Large 2 — flagship general-purpose model. Best answer quality (default).\n- `alfred-ft5`: Alfred FT5 — LightOn fine-tuned model, lighter and faster for straightforward questions.\n\n* `mistral-large-latest` - mistral-large-latest\n* `alfred-ft5` - alfred-ft5"
-        ),
-    ] = "mistral-large-latest"
+class BatchResponse(BaseModel):
+    results: Annotated[list[BatchResultItem], Field(title="Results")]
 
 
 class BrowseFolderItem(BaseModel):
@@ -1307,6 +1429,19 @@ class ContentTypeActionRequest(BaseModel):
             title="Choices",
         ),
     ] = None
+
+
+class ContentTypeBatchRequest(BaseModel):
+    """
+    Batch request for content-type schema operations.
+
+    All actions are validated upfront before any execution begins.
+    """
+
+    actions: Annotated[
+        list[ContentTypeActionRequest],
+        Field(max_length=50, min_length=1, title="Actions"),
+    ]
 
 
 class ContentTypeWrite200Response(
@@ -1431,6 +1566,19 @@ class FileFacetActionRequest(BaseModel):
     ] = None
 
 
+class FileFacetBatchRequest(BaseModel):
+    """
+    Batch request for file facet operations.
+
+    All actions are validated upfront before any execution begins.
+    """
+
+    actions: Annotated[
+        list[FileFacetActionRequest],
+        Field(max_length=50, min_length=1, title="Actions"),
+    ]
+
+
 class FileRetrieveResponseSerializerV3(BaseModel):
     id: int
     filename: Annotated[str, Field(description="Filename of the document")]
@@ -1501,6 +1649,42 @@ class FileRetrieveResponseSerializerV3(BaseModel):
         Field(
             description="Facet content types with nested attribute values. Excludable via ?exclude=content_types."
         ),
+    ]
+
+
+class MLModel(BaseModel):
+    id: Annotated[UUID, Field(description="Unique ID for this model")]
+    name: Annotated[str, Field(description="Display name for this MLModel")]
+    technical_name: Annotated[
+        str,
+        Field(
+            description="Instance-wide unique technical name for this model such as it is set in the mode gateway configuration"
+        ),
+    ]
+    model_type: Annotated[
+        ModelTypeEnum,
+        Field(
+            description="Type of model (eg. 'Large Language Model', 'Embedding Model','Vision Language Model', 'Multi-Vector Model)\n\n* `Large Language Model` - Large Language Model\n* `Embedding Model` - Embedding Model\n* `Vision Language Model` - Vision Language Model\n* `Multi-Vector Model` - Multi-Vector Model"
+        ),
+    ]
+    enabled: Annotated[
+        bool, Field(description="Wether or not this model is enabled instance-wide.")
+    ]
+    is_default_for_company: Annotated[
+        bool,
+        Field(
+            description="Wether or not this model is set as default for this company."
+        ),
+    ]
+    health: Annotated[MLModelHealth, Field(description="Health status of the model")]
+    source: Annotated[
+        SourceEnum | None,
+        Field(
+            description="Whether the model is managed by the platform ('managed') or registered by the company ('custom').\n\n* `managed` - managed\n* `custom` - custom"
+        ),
+    ] = "managed"
+    linked_aliases: Annotated[
+        list[MLModelToAliasMapping], Field(description="Aliases linked to this model")
     ]
 
 
@@ -1817,11 +2001,15 @@ class PaginatedStandardWorkspaceV3ListResponseList(BaseModel):
 class PatchedUpdateWorkspaceV3Request(BaseModel):
     name: Annotated[
         str | None,
-        Field(description="Workspace name (max 100 characters, cannot be empty)."),
+        Field(
+            description="Workspace name (max 100 characters, cannot be empty). When sent together with `deleted_at: null` (restore), the workspace is restored under this name — used to resolve a collision when the original name was re-taken by a live workspace during the grace period."
+        ),
     ] = None
     description: Annotated[
         str | None,
-        Field(description="Workspace description. Send empty string or null to clear."),
+        Field(
+            description="Workspace description. Send empty string or null to clear. May be sent together with `deleted_at: null` (restore) to set the description as part of the restore request; a name collision rejects the whole request before the description is applied. `members` and `datasource` are not accepted on a restore request — restore first, then PATCH them."
+        ),
     ] = None
     members: Annotated[
         Any | None,
