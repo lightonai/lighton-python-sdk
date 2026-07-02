@@ -57,7 +57,7 @@ key = ApiKey(
     scopes=[ApiKeyScope(workspace_id=42, role=Role.viewer)],  # omit for an unscoped key
 ).create(client)
 
-print(key.key)  # plaintext secret — shown once, store it now
+print(key.key.get_secret_value())  # plaintext secret (SecretStr) — shown once, store it now
 
 # Manage existing keys
 for k in ApiKey.list(client):

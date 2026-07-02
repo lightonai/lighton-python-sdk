@@ -11,7 +11,7 @@ from builtins import list as _list
 from datetime import datetime
 from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from lighton._active_record import _ActiveRecord
 from lighton.enums import Role
@@ -51,8 +51,9 @@ class ApiKey(_ActiveRecord):
     created_at: datetime | None = Field(
         None, description="Creation timestamp (read-only)."
     )
-    key: str | None = Field(
-        None, description="Plaintext secret — returned ONLY by create(), once."
+    key: SecretStr | None = Field(
+        None,
+        description="Plaintext secret — returned ONLY by create(), once. Use .get_secret_value().",
     )
 
     # --- instance lifecycle ------------------------------------------------

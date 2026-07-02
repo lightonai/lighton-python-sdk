@@ -80,7 +80,8 @@ Chosen pattern (user preference) over a resource-manager. Shared plumbing lives 
   fields survive a later `refresh()` (see ApiKey.key, File.path below).
 - Curated schema is **independent of the generated api types** (`extra="ignore"` drops noisy response fields). Hand-written models give stable, clean DX; generated ones are ugly and get regenerated.
 
-`ApiKey` follows the same shape. Its one nuance: the plaintext secret (`key`) is
+`ApiKey` follows the same shape. Its one nuance: the plaintext secret (`key`, a
+`SecretStr` — read via `.get_secret_value()`, and it won't leak in logs/`repr`) is
 returned only by `create()`, once — `_absorb` only overwrites fields present in the
 response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
 

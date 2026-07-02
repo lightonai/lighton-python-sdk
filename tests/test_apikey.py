@@ -50,13 +50,15 @@ def test_create_returns_secret_once(client):
     key = ApiKey(name="ci").create(client)
     assert key.id == "k_1"
     assert key.prefix == "lo_abc"
-    assert key.key == "secret-xyz"  # plaintext only on create
+    assert key.key is not None
+    assert key.key.get_secret_value() == "secret-xyz"  # plaintext only on create
 
 
 def test_refresh_preserves_in_memory_secret(client):
     key = ApiKey(name="ci").create(client)
     key.refresh()  # GET response omits "key"
-    assert key.key == "secret-xyz"  # not wiped by the response that lacks it
+    assert key.key is not None
+    assert key.key.get_secret_value() == "secret-xyz"  # not wiped by the response
 
 
 def test_list_follows_pagination(client):
