@@ -14,6 +14,34 @@ client = LightOn()  # reads LIGHTON_API_KEY from the environment
 answer = client.ask(query="What is LightOn?")
 ```
 
+## Primary verbs
+
+`ask`, `search`, and `parse` live directly on the client. Scope any retrieval
+to workspaces or specific files (objects or bare ids).
+
+```python
+from lighton import LightOn, SearchMode
+
+client = LightOn()
+
+# ask — grounded, LLM-generated answer over indexed documents
+resp = client.ask("What were Q4 revenues?", workspaces=[42], max_results=5)
+print(resp.answer)
+for r in resp.results:               # ranked chunks used as context
+    print(r.source.filename, r.score)
+
+# search — ranked passages, no generation
+resp = client.search("termination clause", files=[123], mode=SearchMode.text)
+for r in resp.results:
+    print(r.score, r.content)
+
+# parse — document to per-page Markdown (pass a local path XOR a public URL)
+doc = client.parse(path="report.pdf")
+# doc = client.parse(url="https://example.com/report.pdf")
+for page in doc.result.pages:
+    print(page.index, page.markdown)
+```
+
 ## Workspaces
 
 Workspaces are active-record objects: an instance manages its own lifecycle.
