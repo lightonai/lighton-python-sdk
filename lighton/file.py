@@ -1,4 +1,4 @@
-"""File schema + management (active-record), mirroring Workspace/ApiKey.
+"""File schema + management (active-record, see `_ActiveRecord`).
 
 Uploading a file to a workspace *is* the ingestion: POST /api/v3/files returns a
 File carrying a processing `status` (pending → converting → parsing → embedding →
@@ -6,7 +6,7 @@ embedded, or a *_failed / fail terminal state). There is no separate ingestion-j
 resource — you poll this same File (refresh()/wait()) until it's terminal.
 
 create() is a multipart upload (binary `file` + form fields), unlike the JSON
-create() on Workspace/ApiKey. list()/get()/delete()/save() match their shape.
+create() on Workspace/ApiKey.
 """
 
 from __future__ import annotations
@@ -18,10 +18,11 @@ from builtins import list as _list
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import Field
 
+from lighton._active_record import _ActiveRecord
 from lighton.enums import FileStatus
 from lighton.exceptions import LightOnError
 
@@ -39,9 +40,9 @@ _TERMINAL_BAD = {
 }
 
 
-class File(BaseModel):
-    # Response carries extra fields (workspace, summaries, content_types, …); ignore.
-    model_config = ConfigDict(extra="ignore")
+class File(_ActiveRecord):
+    _base: ClassVar[str] = _BASE
+    _resource: ClassVar[str] = "file"
 
     id: int | None = Field(
         None, description="Server-assigned id; None until created/retrieved."
@@ -84,42 +85,7 @@ class File(BaseModel):
         None, description="Last-update timestamp (read-only)."
     )
 
-    _client: LightOn | None = PrivateAttr(default=None)
-
-    # --- class-level (no instance yet) -------------------------------------
-    @classmethod
-    def list(cls, client: LightOn, *, workspace_id: int | None = None) -> _list[File]:
-        """List files, following pagination to the end.
-
-        Args:
-            client: The client used to make the request and bind to each result.
-            workspace_id: Optional filter; omit to list files across all workspaces.
-
-        Returns:
-            The matching files, each bound to `client`.
-        """
-        params = {"workspace_id": workspace_id} if workspace_id is not None else None
-        items: _list[File] = []
-        path: str | None = _BASE
-        while path:  # follow pagination — no silent truncation
-            page = client._request("GET", path, params=params)
-            items.extend(cls._bind(client, row) for row in page["results"])
-            path = page.get("next")
-            params = None  # `next` already carries the query string
-        return items
-
-    @classmethod
-    def get(cls, client: LightOn, id: int) -> File:
-        """Fetch a single file by id.
-
-        Args:
-            client: The client used to make the request and bind to the result.
-            id: The file id to retrieve.
-
-        Returns:
-            The file, bound to `client`.
-        """
-        return cls._bind(client, client._request("GET", f"{_BASE}/{id}"))
+    # list() is inherited; filter by workspace with File.list(client, workspace_id=...).
 
     # --- instance lifecycle ------------------------------------------------
     def create(self, client: LightOn, *, tags: _list[int] | None = None) -> File:
@@ -166,19 +132,6 @@ class File(BaseModel):
             self._api("PATCH", f"{_BASE}/{self.id}", json={"title": self.title})
         )
 
-    def refresh(self) -> File:
-        """Re-fetch this file from the API (GET) — use to poll ingestion status.
-
-        Returns:
-            `self`, updated with the latest field values (including `status`).
-        """
-        return self._absorb(self._api("GET", f"{_BASE}/{self.id}"))
-
-    def delete(self) -> None:
-        """Delete this file and clear its local id."""
-        self._api("DELETE", f"{_BASE}/{self.id}")
-        self.id = None
-
     def wait(self, timeout: float = 300.0, poll: float = 2.0) -> File:
         """Block (polling) until ingestion reaches a terminal state.
 
@@ -208,27 +161,6 @@ class File(BaseModel):
             raise LightOnError(
                 f"ingestion failed ({self.status}): {self.status_detail}"
             )
-        return self
-
-    # --- internals ---------------------------------------------------------
-    def _api(self, method: str, path: str, **kwargs: object):
-        if self.id is None or self._client is None:
-            raise ValueError("file must be created or retrieved first")
-        return self._client._request(method, path, **kwargs)
-
-    @classmethod
-    def _bind(cls, client: LightOn, data: dict) -> File:
-        obj = cls.model_validate(data)
-        obj._client = client
-        return obj
-
-    def _absorb(self, data: dict | None) -> File:
-        """Copy returned fields onto self, keeping _client and the local path."""
-        if data:
-            fresh = self.model_validate(data)
-            for field in type(self).model_fields:
-                if field in data:  # only overwrite what the response returned
-                    setattr(self, field, getattr(fresh, field))
         return self
 
 

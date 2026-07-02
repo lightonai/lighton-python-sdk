@@ -1,8 +1,8 @@
 """Workspace schema + management, independent of the auto-generated api types.
 
-Active-record style: a Workspace instance manages its own lifecycle. create()
-binds a client to the instance; subsequent save()/refresh()/delete() reuse it.
-list()/get() are classmethods since there's no instance to act on yet.
+Active-record style (see `_ActiveRecord`): a Workspace instance manages its own
+lifecycle. create() binds a client to the instance; subsequent save()/refresh()/
+delete() reuse it. list()/get() are inherited classmethods.
 """
 
 from __future__ import annotations
@@ -10,9 +10,11 @@ from __future__ import annotations
 # The list() classmethod shadows builtin list in return annotations (class scope).
 from builtins import list as _list
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import Field
+
+from lighton._active_record import _ActiveRecord
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
@@ -21,9 +23,9 @@ if TYPE_CHECKING:
 _BASE = "/api/v3/workspaces"
 
 
-class Workspace(BaseModel):
-    # Response carries extra fields (summaries, sync, scoped_api_keys); ignore them.
-    model_config = ConfigDict(extra="ignore")
+class Workspace(_ActiveRecord):
+    _base: ClassVar[str] = _BASE
+    _resource: ClassVar[str] = "workspace"
 
     id: int | None = Field(
         None, description="Server-assigned id; None until created/retrieved."
@@ -47,40 +49,6 @@ class Workspace(BaseModel):
     updated_at: datetime | None = Field(
         None, description="Last-update timestamp (read-only)."
     )
-
-    _client: LightOn | None = PrivateAttr(default=None)
-
-    # --- class-level (no instance yet) -------------------------------------
-    @classmethod
-    def list(cls, client: LightOn) -> _list[Workspace]:
-        """List every workspace, following pagination to the end.
-
-        Args:
-            client: The client used to make the request and bind to each result.
-
-        Returns:
-            All workspaces the caller can see, each bound to `client`.
-        """
-        items: list[Workspace] = []
-        path: str | None = _BASE
-        while path:  # follow pagination — no silent truncation
-            page = client._request("GET", path)
-            items.extend(cls._bind(client, row) for row in page["results"])
-            path = page.get("next")
-        return items
-
-    @classmethod
-    def get(cls, client: LightOn, id: int) -> Workspace:
-        """Fetch a single workspace by id.
-
-        Args:
-            client: The client used to make the request and bind to the result.
-            id: The workspace id to retrieve.
-
-        Returns:
-            The workspace, bound to `client`.
-        """
-        return cls._bind(client, client._request("GET", f"{_BASE}/{id}"))
 
     # --- instance lifecycle ------------------------------------------------
     def create(self, client: LightOn) -> Workspace:
@@ -107,10 +75,7 @@ class Workspace(BaseModel):
         data = self._api(
             "PATCH",
             f"{_BASE}/{self.id}",
-            json={
-                "name": self.name,
-                "description": self.description,
-            },
+            json={"name": self.name, "description": self.description},
         )
         return self._absorb(data)
 
@@ -139,41 +104,7 @@ class Workspace(BaseModel):
         Raises:
             ValueError: If this workspace has not been created/retrieved yet.
         """
-        if self.id is None or self._client is None:
-            raise ValueError("workspace must be created or retrieved first")
+        client = self._bound_client()
         file.workspace_id = self.id
-        created = file.create(self._client, tags=tags)
+        created = file.create(client, tags=tags)
         return created.wait(timeout) if wait else created
-
-    def refresh(self) -> Workspace:
-        """Re-fetch this workspace from the API (GET).
-
-        Returns:
-            `self`, updated with the latest field values.
-        """
-        return self._absorb(self._api("GET", f"{_BASE}/{self.id}"))
-
-    def delete(self) -> None:
-        """Delete this workspace and clear its local id."""
-        self._api("DELETE", f"{_BASE}/{self.id}")
-        self.id = None
-
-    # --- internals ---------------------------------------------------------
-    def _api(self, method: str, path: str, **kwargs: object):
-        if self.id is None or self._client is None:
-            raise ValueError("workspace must be created or retrieved first")
-        return self._client._request(method, path, **kwargs)
-
-    @classmethod
-    def _bind(cls, client: LightOn, data: dict) -> Workspace:
-        ws = cls.model_validate(data)
-        ws._client = client
-        return ws
-
-    def _absorb(self, data: dict | None) -> Workspace:
-        """Copy fresh field values from a response onto self, keeping _client."""
-        if data:
-            fresh = self.model_validate(data)
-            for field in type(self).model_fields:
-                setattr(self, field, getattr(fresh, field))
-        return self

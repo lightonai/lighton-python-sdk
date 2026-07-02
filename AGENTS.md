@@ -14,7 +14,8 @@ lighton/
   __init__.py        # public exports: LightOn, LightOnConfiguration, Workspace
   _client.py         # LightOn client: httpx wrapper, _request, primary verbs
   exceptions.py      # exception tree
-  workspace.py       # Workspace — data + behavior (active-record), lives at root
+  _active_record.py  # _ActiveRecord base: shared list/get/refresh/delete/_bind/_api/_absorb
+  workspace.py       # Workspace — active-record, lives at root
   apikey.py          # ApiKey / ApiKeyScope — active-record, lives at root
   file.py            # File — active-record + wait_all(); upload = ingestion
   enums.py           # curated StrEnum vocabularies (FileStatus, Role) shared by resources
@@ -56,12 +57,27 @@ too, no documented value set).
 
 ## Resource management: active-record
 
-Chosen pattern (user preference) for `Workspace`, over a resource-manager:
+Chosen pattern (user preference) over a resource-manager. Shared plumbing lives in the
+`_ActiveRecord(BaseModel)` base (`_active_record.py`); `Workspace`/`ApiKey`/`File` subclass it.
 
-- Instance methods manage lifecycle: `create(client)` binds the client to the instance (`PrivateAttr`); `save()` (PATCH), `refresh()` (GET), `delete()` reuse it.
-- `list(client)` / `get(client, id)` are **classmethods** (no instance yet) — this asymmetry is accepted and inherent to active-record.
-- Operating on a non-persisted instance (no id/client) raises `ValueError`.
-- `list()` follows pagination fully — no silent truncation.
+- **Base provides** the read-side + client-binding: `list`/`get` (classmethods), `refresh`,
+  `delete`, `_bind`, `_api`, `_absorb`, `_bound_client`, the `_client` PrivateAttr, and
+  `model_config = extra="ignore"`. Subclasses set two ClassVars — `_base` (URL path) and
+  `_resource` (name used in the not-persisted `ValueError`).
+- **Subclasses provide** only what genuinely diverges: the field schema, `create()`
+  (JSON body vs multipart), and `save()` (per-resource PATCH payload).
+- Instance methods manage lifecycle: `create(client)` binds the client (`PrivateAttr`);
+  `save()`/`refresh()`/`delete()` reuse it. `list`/`get` are classmethods (no instance yet)
+  — this asymmetry is inherent to active-record.
+- `id` is declared `int | str | None` on the base (so base methods type-check) and
+  **narrowed per subclass** (`int | None` for Workspace/File, `str | None` for ApiKey).
+- Operating on a non-persisted instance (no id/client) raises `ValueError` via `_bound_client()`.
+- `list()` follows pagination fully — no silent truncation. It takes `**params` query
+  filters (e.g. `File.list(client, workspace_id=…)`); no typed per-resource override
+  because `list` is invariant in its element type — a `list[File]`-returning override
+  isn't LSP-assignable to the base's `list[Self]`, and ty rejects it.
+- `_absorb` overwrites **only fields present in the response**, so one-time/local-only
+  fields survive a later `refresh()` (see ApiKey.key, File.path below).
 - Curated schema is **independent of the generated api types** (`extra="ignore"` drops noisy response fields). Hand-written models give stable, clean DX; generated ones are ugly and get regenerated.
 
 `ApiKey` follows the same shape. Its one nuance: the plaintext secret (`key`) is
@@ -80,12 +96,10 @@ response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
 - `tags` is a `create()` **argument**, not a model field — the response returns tags as
   objects (not the `list[int]` the request takes), which would clash on `_absorb`.
 
-If adding new resources, follow the same active-record shape for consistency.
-**The list/get/_bind/_absorb/_api plumbing is now duplicated across `workspace.py`,
-`apikey.py`, and `file.py`** — still a deliberate choice over a shared base, because
-`File.create` (multipart) and `ApiKey`'s one-time-secret `_absorb` diverge enough that
-only the read-side is truly identical. Extract a shared `_ActiveRecord` base when a
-**fourth** resource lands or the copies start drifting in the shared parts.
+If adding new resources, subclass `_ActiveRecord`: set `_base`/`_resource`, declare the
+field schema (narrow `id`), and add `create()`/`save()`. Everything else is inherited.
+Only push behavior down into the base when a new resource actually shares it — don't
+generalize speculatively for a shape only one subclass needs.
 
 ## Generated types
 
