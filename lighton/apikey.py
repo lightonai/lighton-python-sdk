@@ -85,6 +85,10 @@ class ApiKey(_ActiveRecord):
         data = self._api(
             "PATCH",
             f"{_BASE}/{self.id}",
-            json={"name": self.name, "scopes": [s.model_dump() for s in self.scopes]},
+            # `or None`: empty scopes means unscoped, matching create() — not [].
+            json={
+                "name": self.name,
+                "scopes": [s.model_dump() for s in self.scopes] or None,
+            },
         )
         return self._absorb(data)

@@ -91,3 +91,19 @@ def test_create_serializes_scopes_and_expiry():
 
     assert sent["body"]["scopes"] == [{"workspace_id": 3, "role": "viewer"}]
     assert sent["body"]["expires_at"].startswith("2030-01-01")
+
+
+def test_save_sends_empty_scopes_as_null_like_create():
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"id": "k_1", "name": "ci", "scopes": []})
+
+    client = LightOn(
+        "k", config=LightOnConfiguration(transport=httpx.MockTransport(handler))
+    )
+    key = ApiKey(name="ci")
+    key.id, key._client, key.scopes = "k_1", client, []
+    key.save()
+    assert sent["body"]["scopes"] is None  # unscoped, not [] — matches create()
