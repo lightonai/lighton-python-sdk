@@ -41,7 +41,8 @@ too, no documented value set).
 ## Client
 
 - **Sync only.** `httpx.Client`. No async client until a real event-loop caller needs one — `_request` is the only logic to mirror.
-- **One `_request`** does auth header, error mapping (→ raises), and JSON parse. All calls route through it.
+- **One `_request`** does auth header, error mapping (→ raises), and JSON parse. All calls route through it. A 2xx body that isn't JSON → `MalformedResponseError`.
+- **Primary verbs** (`ask`/`search`/`parse`) take explicit typed params and return the generated response models (`AskResponse`/`SearchResponse`/`ParseResponse`) via `model_validate`. `ask`/`search` take `workspaces`/`files` (lists of `Workspace`/`File` objects or bare ids; `_ids()` coerces via duck-typed `.id` → the API's `workspace_id`/`file_id`). `parse` takes `str` (URL → JSON body) or `Path` (→ multipart). Deferred: tag/content_type/attribute filters, streaming, async parse — add the params when needed.
 - **Config object.** Non-essential knobs (`base_url`, `timeout`, `retries`, `transport`) live in `LightOnConfiguration` (pydantic, `arbitrary_types_allowed`). `api_key` stays a direct `LightOn()` arg; falls back to `LIGHTON_API_KEY` env.
 - **Retries** via `httpx.HTTPTransport(retries=)` — connection errors only, exponential backoff. No 5xx/429 retry yet.
 - **Timeout** default: `connect=5s`, read/write/pool `120s`.
@@ -53,7 +54,8 @@ too, no documented value set).
 `LightOnError` base → `LightOnConnectionError` (transport) and `LightOnAPIError`
 (non-2xx, carries `status_code`/`body`) → `AuthenticationError` (401/403),
 `NotFoundError` (404), `RateLimitError` (429), `ServerError` (5xx).
-`exceptions.from_response()` maps status → class.
+`exceptions.from_response()` maps status → class. `MalformedResponseError`
+(sibling of `LightOnAPIError`, not a subclass) — a 2xx body that isn't JSON.
 
 ## Resource management: active-record
 

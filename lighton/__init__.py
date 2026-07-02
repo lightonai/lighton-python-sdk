@@ -1,6 +1,6 @@
 from lighton._client import LightOn
 from lighton.apikey import ApiKey, ApiKeyScope
-from lighton.enums import FileStatus, Role
+from lighton.enums import FileStatus, RelevanceScoring, Role, SearchMode
 from lighton.file import File, wait_all
 from lighton.types import LightOnConfiguration
 from lighton.workspace import Workspace
@@ -13,7 +13,9 @@ __all__ = [
     "FileStatus",
     "LightOn",
     "LightOnConfiguration",
+    "RelevanceScoring",
     "Role",
+    "SearchMode",
     "Workspace",
     "wait_all",
 ]

@@ -27,6 +27,21 @@ class FileStatus(StrEnum):
     updating = "updating"
 
 
+class SearchMode(StrEnum):
+    """Retrieval mode for search/ask."""
+
+    text = "text"  # hybrid keyword + vector
+    vision = "vision"  # VLM-embedded page image
+
+
+class RelevanceScoring(StrEnum):
+    """Cross-encoder relevance scoring step for search."""
+
+    none = "none"  # skip scoring, return all candidates
+    scoring_only = "scoring_only"  # score but don't filter
+    scoring_and_filtering = "scoring_and_filtering"  # score and drop below threshold
+
+
 class Role(StrEnum):
     """Access role granted by an API-key scope on a workspace."""
 
