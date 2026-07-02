@@ -15,6 +15,10 @@ class LightOnConnectionError(LightOnError):
     """Transport failure before any response was received (DNS, timeout, reset)."""
 
 
+class MalformedResponseError(LightOnError):
+    """A 2xx response body was not valid JSON."""
+
+
 class LightOnAPIError(LightOnError):
     """The API returned a non-2xx response."""
 

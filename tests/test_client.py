@@ -83,6 +83,12 @@ def test_empty_2xx_returns_none():
     assert client._request("DELETE", "/x") is None
 
 
+def test_malformed_json_2xx_raises():
+    client = make_client(lambda req: httpx.Response(200, content=b"not json"))
+    with pytest.raises(exc.MalformedResponseError):
+        client.ask()
+
+
 def test_transport_error_is_wrapped():
     def handler(req: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down")

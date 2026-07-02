@@ -58,7 +58,14 @@ class LightOn:
             raise exc.LightOnConnectionError(str(e)) from e
         if not response.is_success:
             raise exc.from_response(response)
-        return response.json() if response.content else None
+        if not response.content:
+            return None
+        try:
+            return response.json()
+        except ValueError as e:
+            raise exc.MalformedResponseError(
+                f"expected JSON but got: {response.text[:200]!r}"
+            ) from e
 
     # --- primary verbs -----------------------------------------------------
     # ponytail: payloads return raw dicts for now.
