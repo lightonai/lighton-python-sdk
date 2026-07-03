@@ -12,7 +12,11 @@ Design decisions for the LightOn Python SDK. Read before changing architecture.
 ```
 lighton/
   __init__.py        # public exports: LightOn, LightOnConfiguration, Workspace
-  _client.py         # LightOn client: httpx wrapper, _request, primary verbs
+  _client.py         # LightOn client: httpx wrapper, _request, lifecycle — composes verb mixins
+  utils.py           # request-body helpers (_compact, _ids) shared by the verbs
+  verbs/             # one primary verb per file, each a mixin on LightOn
+    _base.py         # _VerbClient: declares _request (LightOn provides the real one)
+    ask.py search.py parse.py extract.py
   exceptions.py      # exception tree
   _active_record.py  # _ActiveRecord base: shared list/get/refresh/delete/_bind/_api/_absorb
   workspace.py       # Workspace — active-record, lives at root
@@ -42,7 +46,7 @@ too, no documented value set).
 
 - **Sync only.** `httpx.Client`. No async client until a real event-loop caller needs one — `_request` is the only logic to mirror.
 - **One `_request`** does auth header, error mapping (→ raises), and JSON parse. All calls route through it. A 2xx body that isn't JSON → `MalformedResponseError`.
-- **Primary verbs** (`ask`/`search`/`parse`) take explicit typed params and return the generated response models (`AskResponse`/`SearchResponse`/`ParseResponse`) via `model_validate`. `ask`/`search` take `workspaces`/`files` (lists of `Workspace`/`File` objects or bare ids; `_ids()` coerces via duck-typed `.id` → the API's `workspace_id`/`file_id`). `parse` takes `str` (URL → JSON body) or `Path` (→ multipart). Deferred: tag/content_type/attribute filters, streaming, async parse — add the params when needed.
+- **Primary verbs** live one-per-file in `verbs/` as mixins (`AskMixin`/`SearchMixin`/`ParseMixin`/`ExtractMixin`) composed onto `LightOn`. Each references `self._request`; the stub on `_VerbClient` (their shared base) makes them type-check in isolation, and `LightOn._request` overrides it at runtime. Keeps `_client.py` to just the transport core. They take explicit typed params and return the generated response models via `model_validate`. `ask`/`search` take `workspaces`/`files` (lists of `Workspace`/`File` objects or bare ids; `_ids()` in `utils.py` coerces via duck-typed `.id` → the API's `workspace_id`/`file_id`). `parse` takes keyword-only `path` XOR `url` (multipart vs JSON body; raises `ValueError` unless exactly one). Deferred: tag/content_type/attribute filters, streaming, async parse — add the params when needed.
 - **Config object.** Non-essential knobs (`base_url`, `timeout`, `retries`, `transport`) live in `LightOnConfiguration` (pydantic, `arbitrary_types_allowed`). `api_key` stays a direct `LightOn()` arg; falls back to `LIGHTON_API_KEY` env.
 - **Retries** via `httpx.HTTPTransport(retries=)` — connection errors only, exponential backoff. No 5xx/429 retry yet.
 - **Timeout** default: `connect=5s`, read/write/pool `120s`.
