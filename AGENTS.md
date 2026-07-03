@@ -106,6 +106,11 @@ response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
   `wait()` block. `wait_all()` (module-level, `ThreadPoolExecutor`) waits on many at once.
 - `tags` is a `create()` **argument**, not a model field — the response returns tags as
   objects (not the `list[int]` the request takes), which would clash on `_absorb`.
+- **`get_by_name(client, filename, *, workspace)`** fetches the one file with an exact
+  filename in a workspace (`workspace` = object or id). The API's `filename` filter is a
+  case-insensitive *partial* match, so results are narrowed to an exact `filename` match
+  client-side, then required to be unique — raises `ValueError` on no extension, missing
+  workspace id, or a non-unique (0 or >1) match.
 - **`tag()`/`untag()`** assign/remove tags post-upload; both accept `Tag` objects, ids,
   **or names** via `tag.resolve_ids(client, ...)` — names are resolved through a single
   `Tag.list()` and an unknown name raises `ValueError` (fail loud, not silent no-tag).

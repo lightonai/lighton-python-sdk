@@ -166,6 +166,70 @@ def test_tag_untag_empty_is_noop(tmp_path):
     assert f.tag([]) is f and f.untag([]) is f
 
 
+def _files_list_client(results):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": results, "next": None})
+
+    return _make_client(handler), handler
+
+
+def test_get_by_name_returns_unique_match():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["query"] = dict(request.url.params)
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"id": 1, "filename": "report.pdf"},
+                    {
+                        "id": 2,
+                        "filename": "annual_report.pdf",
+                    },  # partial match, dropped
+                ],
+                "next": None,
+            },
+        )
+
+    f = File.get_by_name(_make_client(handler), "report.pdf", workspace=42)
+    assert f.id == 1
+    assert seen["query"]["filename"] == "report.pdf"
+    assert seen["query"]["workspace_id"] == "42"
+
+
+def test_get_by_name_accepts_workspace_object():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert dict(request.url.params)["workspace_id"] == "7"
+        return httpx.Response(
+            200, json={"results": [{"id": 1, "filename": "a.pdf"}], "next": None}
+        )
+
+    ws = Workspace(name="w")
+    ws.id = 7
+    assert File.get_by_name(_make_client(handler), "a.pdf", workspace=ws).id == 1
+
+
+def test_get_by_name_requires_extension():
+    client = _make_client(
+        lambda r: httpx.Response(200, json={"results": [], "next": None})
+    )
+    with pytest.raises(ValueError, match="must include an extension"):
+        File.get_by_name(client, "report", workspace=1)
+
+
+def test_get_by_name_raises_on_zero_or_many():
+    none_client, _ = _files_list_client([])
+    with pytest.raises(ValueError, match="found 0"):
+        File.get_by_name(none_client, "x.pdf", workspace=1)
+
+    many_client, _ = _files_list_client(
+        [{"id": 1, "filename": "x.pdf"}, {"id": 2, "filename": "x.pdf"}]
+    )
+    with pytest.raises(ValueError, match="found 2"):
+        File.get_by_name(many_client, "x.pdf", workspace=1)
+
+
 def test_workspace_ingest_fills_workspace_id(tmp_path):
     doc = tmp_path / "a.txt"
     doc.write_text("x")

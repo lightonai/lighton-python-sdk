@@ -225,7 +225,7 @@ hood and a name that doesn't exist raises `ValueError`:
 ```python
 from lighton import File
 
-doc = File.get(client, 7)
+doc = File.get_by_name(client, "nda-2026.pdf", workspace=42)
 
 doc.tag([contracts])                 # Tag object
 doc.tag([12, 13])                    # bare ids
@@ -298,6 +298,10 @@ for doc in File.list(client, workspace_id=42):
     print(doc.id, doc.filename, doc.status)
 
 doc = File.get(client, f.id)
+
+# Or fetch by exact filename within a workspace (must include the extension;
+# raises unless exactly one match). workspace takes a Workspace or an id.
+doc = File.get_by_name(client, "report.pdf", workspace=42)
 doc.title = "Q4 Report"
 doc.save()
 

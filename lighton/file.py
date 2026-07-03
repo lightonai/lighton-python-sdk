@@ -30,6 +30,7 @@ from lighton.tag import resolve_ids
 if TYPE_CHECKING:
     from lighton._client import LightOn
     from lighton.tag import Tag
+    from lighton.workspace import Workspace
 
 _BASE = "/api/v3/files"
 
@@ -88,6 +89,44 @@ class File(_ActiveRecord):
     )
 
     # list() is inherited; filter by workspace with File.list(client, workspace_id=...).
+
+    @classmethod
+    def get_by_name(
+        cls, client: LightOn, filename: str, *, workspace: Workspace | int
+    ) -> File:
+        """Fetch the one file with this exact filename in a workspace.
+
+        The API's `filename` filter is a case-insensitive *partial* match, so the
+        candidates it returns are narrowed to an exact `filename` match here.
+
+        Args:
+            client: The client to query with and bind to the result.
+            filename: Full filename including extension (e.g. "report.pdf").
+            workspace: The workspace to search in (Workspace object or id).
+
+        Returns:
+            The matching File, bound to `client`.
+
+        Raises:
+            ValueError: If `filename` has no extension, the workspace has no id, or
+                the match isn't unique (zero or several files with that exact name).
+        """
+        if not Path(filename).suffix:
+            raise ValueError(f"filename must include an extension, got {filename!r}")
+        workspace_id = workspace if isinstance(workspace, int) else workspace.id
+        if workspace_id is None:
+            raise ValueError("workspace must be created/retrieved (has no id)")
+        matches = [
+            f
+            for f in cls.list(client, workspace_id=workspace_id, filename=filename)
+            if f.filename == filename
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"expected exactly one file named {filename!r} in workspace "
+                f"{workspace_id}, found {len(matches)}"
+            )
+        return matches[0]
 
     # --- instance lifecycle ------------------------------------------------
     def create(self, client: LightOn, *, tags: _list[int] | None = None) -> File:
