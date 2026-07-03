@@ -16,8 +16,8 @@ answer = client.ask(query="What is LightOn?")
 
 ## Primary verbs
 
-`ask`, `search`, and `parse` live directly on the client. Scope any retrieval
-to workspaces or specific files (objects or bare ids).
+`ask`, `search`, `parse`, and `extract` live directly on the client. Scope any
+retrieval to workspaces or specific files (objects or bare ids).
 
 ```python
 from lighton import LightOn, SearchMode
@@ -40,6 +40,83 @@ doc = client.parse(path="report.pdf")
 # doc = client.parse(url="https://example.com/report.pdf")
 for page in doc.result.pages:
     print(page.index, page.markdown)
+
+# extract — structured data guided by a schema (see Extract below)
+resp = client.extract(schema=InvoiceModel, path="invoice.pdf")
+print(resp.result.data)
+```
+
+## Extract
+
+`extract(schema, *, path | url)` pulls structured data from a document — pass a
+local `path` to upload (multipart) or a public `url` to fetch, exactly one (same
+as `parse`). The `schema` drives guided generation and can be **a pydantic
+model** or a **raw JSON-Schema dict** — use whichever you have.
+
+A pydantic model is the easy path: nested models, `list[...]`, and `X | None`
+fields all convert to a valid vLLM `response_format` schema for you.
+
+Give every field a meaningful `Field(description=...)` — the descriptions are
+carried into the schema and steer the model, so they materially improve
+extraction quality. Treat them as instructions, not documentation.
+
+```python
+from lighton import LightOn
+from pydantic import BaseModel, Field
+
+client = LightOn()
+
+
+class Person(BaseModel):
+    last_name: str = Field(description="Family name, as written in the document.")
+    first_name: str | None = Field(
+        None, description="Given name; null if not stated."
+    )
+    role: str | None = Field(
+        None, description="Title or role if given, e.g. 'sender', 'recipient'."
+    )
+
+
+class Letter(BaseModel):
+    people: list[Person] = Field(
+        description="Every person or entity named in the letter."
+    )
+    subject: str | None = Field(
+        None, description="The letter's stated subject line, or null if absent."
+    )
+
+
+resp = client.extract(schema=Letter, path="letter.pdf")
+# or from a public URL: client.extract(schema=Letter, url="https://example.com/letter.pdf")
+for row in resp.result.data:          # one object per page
+    print(row)
+```
+
+Or pass the schema dict directly — it's validated against the JSON-Schema
+meta-schema (raises `jsonschema.SchemaError` if malformed) and sent as-is:
+
+```python
+resp = client.extract(
+    url="https://example.com/invoice.pdf",
+    schema={
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "total": {"type": "number"},
+            "currency": {"type": ["string", "null"]},
+        },
+        "required": ["total"],
+    },
+)
+print(resp.result.data)
+```
+
+Need the converted schema without calling the API (to inspect or cache it)?
+
+```python
+from lighton.utils import convert_pydantic_to_response_format_json
+
+schema = convert_pydantic_to_response_format_json(Letter)
 ```
 
 ## Workspaces
