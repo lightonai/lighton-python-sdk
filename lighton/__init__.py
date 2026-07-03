@@ -1,5 +1,6 @@
 from lighton._client import LightOn
 from lighton.apikey import ApiKey, ApiKeyScope
+from lighton.content_type import Attribute, ContentType, Facet
 from lighton.enums import (
     ExecMode,
     FileStatus,
@@ -18,18 +19,21 @@ __version__ = "0.1.0"
 __all__ = [
     "ApiKey",
     "ApiKeyScope",
+    "Attribute",
+    "ContentType",
     "ExecMode",
     "ExtractJob",
+    "Facet",
     "File",
     "FileStatus",
     "JobStatus",
     "LightOn",
-    "ParseJob",
-    "Tag",
     "LightOnConfiguration",
+    "ParseJob",
     "RelevanceScoring",
     "Role",
     "SearchMode",
+    "Tag",
     "Workspace",
     "wait_all",
 ]

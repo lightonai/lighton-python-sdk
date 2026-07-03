@@ -230,6 +230,80 @@ def test_get_by_name_raises_on_zero_or_many():
         File.get_by_name(many_client, "x.pdf", workspace=1)
 
 
+def test_classify_and_attributes_post_actions(tmp_path):
+    doc = tmp_path / "a.txt"
+    doc.write_text("x")
+    from lighton import ContentType
+
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v3/files/7/facets" and request.method == "POST":
+            bodies.append(json.loads(request.content))
+            return httpx.Response(200, json={})
+        return httpx.Response(201, json={"id": 7, "status": "pending"})
+
+    f = File(path=doc, workspace_id=3).create(_make_client(handler))
+    # ContentType object and bare path string both accepted
+    ct = ContentType(path="legal:contract:nda", code="nda", label="NDA")
+    f.classify(ct)
+    f.set_attribute("legal:contract:nda", "jurisdiction", "FR")
+    f.clear_attribute("legal:contract:nda", "jurisdiction")
+    f.unclassify(ct)
+
+    assert bodies == [
+        {"action": "classify", "content_type_path": "legal:contract:nda"},
+        {
+            "action": "set_value",
+            "content_type_path": "legal:contract:nda",
+            "attribute_name": "jurisdiction",
+            "value": "FR",
+        },
+        {
+            "action": "clear_value",
+            "content_type_path": "legal:contract:nda",
+            "attribute_name": "jurisdiction",
+        },
+        {"action": "unclassify", "content_type_path": "legal:contract:nda"},
+    ]
+
+
+def test_facets_parses_assigned_content_types(tmp_path):
+    doc = tmp_path / "a.txt"
+    doc.write_text("x")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/api/v3/files/7/facets":
+            return httpx.Response(
+                200,
+                json={
+                    "content_types": [
+                        {
+                            "path": "legal:contract:nda",
+                            "code": "nda",
+                            "label": "NDA",
+                            "attributes": [
+                                {
+                                    "name": "jurisdiction",
+                                    "type": "select",
+                                    "value": "FR",
+                                }
+                            ],
+                        }
+                    ],
+                    "can_edit": True,
+                },
+            )
+        return httpx.Response(201, json={"id": 7, "status": "pending"})
+
+    f = File(path=doc, workspace_id=3).create(_make_client(handler))
+    facets = f.facets()
+    assert len(facets) == 1
+    assert facets[0].path == "legal:contract:nda"
+    assert facets[0].attributes[0].name == "jurisdiction"
+    assert facets[0].attributes[0].value == "FR"
+
+
 def test_workspace_ingest_fills_workspace_id(tmp_path):
     doc = tmp_path / "a.txt"
     doc.write_text("x")

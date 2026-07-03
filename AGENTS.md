@@ -22,6 +22,7 @@ lighton/
   workspace.py       # Workspace — active-record, lives at root
   apikey.py          # ApiKey / ApiKeyScope — active-record, lives at root
   tag.py             # Tag — active-record (list/create/delete only; no single GET)
+  content_type.py    # ContentType/Facet/Attribute — content-type taxonomy + file facets
   file.py            # File — active-record + wait_all(); upload = ingestion
   job.py             # ParseJob/ExtractJob — client-bound async handles you poll()
   enums.py           # curated StrEnum vocabularies (FileStatus, Role) shared by resources
@@ -124,6 +125,23 @@ response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
 `GET /tags/<id>`, so the inherited `get()`/`refresh()` are overridden to raise
 `NotImplementedError` rather than 404 at runtime. `create()` posts name/description/
 auto_assign. Tags scope `ask`/`search` via `tags=` (OR-matched `tag_id`).
+
+## Content types & facets
+
+`content_type.py` holds three curated read models (`extra="ignore"`, no active-record —
+these aren't CRUD resources): `ContentType` (a taxonomy node: `path`/`code`/`label`/
+`attributes`/`children`, self-referential — `ContentType.model_rebuild()` resolves the
+forward ref), `Attribute` (shared name/type/value/choices shape, `value` None for a bare
+definition), and `Facet` (a content type assigned to a file + its attribute values).
+`ContentType.list(client, path=/depth=/include_attributes=/query=)` GETs `/content-types`
+— the endpoint returns a **tree** (`{content_types: [...]}`), not paginated, so it can't
+use `_ActiveRecord.list`.
+
+`File` classification (all via `POST /files/<id>/facets` with an `action`): `classify`/
+`unclassify` (assign/remove a content type — T2), `set_attribute`/`clear_attribute` (an
+attribute value under an assigned type — T3), each accepting a `ContentType` or a path
+string (one `_facet(action, ct, **extra)` helper builds the body). `facets()` GETs the
+file's assigned types as `list[Facet]`. Like tags, File models no facet fields locally.
 
 If adding new resources, subclass `_ActiveRecord`: set `_base`/`_resource`, declare the
 field schema (narrow `id`), and add `create()`/`save()`. Everything else is inherited.

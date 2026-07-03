@@ -242,6 +242,42 @@ answer = client.ask("What are the termination terms?", tags=[contracts])
 hits = client.search("indemnification", tags=[contracts.id, 12])
 ```
 
+## Content types
+
+Content types are a company-wide taxonomy (`legal:contract:nda`, …) with typed
+attributes. Browse it with `ContentType.list()` — it returns a tree (each node has
+`children`, and `attributes` when `include_attributes=True`):
+
+```python
+from lighton import ContentType
+
+for ct in ContentType.list(client, include_attributes=True):
+    print(ct.path, ct.label)
+    for attr in ct.attributes:
+        print("  ", attr.name, attr.type, attr.choices)
+```
+
+Classify a file (assign a content type) and set its attribute values. `classify`,
+`unclassify`, `set_attribute`, and `clear_attribute` all take a `ContentType`
+object or a plain path string:
+
+```python
+from lighton import File
+
+doc = File.get_by_name(client, "nda-2026.pdf", workspace=42)
+
+doc.classify("legal:contract:nda")
+doc.set_attribute("legal:contract:nda", "jurisdiction", "FR")
+doc.set_attribute("legal:contract:nda", "signed_on", "2026-07-01")  # date → "YYYY-MM-DD"
+
+# Inspect what's assigned (a Facet per content type, with attribute values)
+for facet in doc.facets():
+    print(facet.path, {a.name: a.value for a in facet.attributes})
+
+doc.clear_attribute("legal:contract:nda", "jurisdiction")
+doc.unclassify("legal:contract:nda")
+```
+
 ## API keys
 
 Same active-record style. The plaintext secret is available **only** right after `create()`.

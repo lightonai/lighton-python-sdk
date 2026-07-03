@@ -23,12 +23,14 @@ from typing import TYPE_CHECKING, ClassVar
 from pydantic import Field
 
 from lighton._active_record import _ActiveRecord
+from lighton.content_type import Facet
 from lighton.enums import FileStatus
 from lighton.exceptions import LightOnError
 from lighton.tag import resolve_ids
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
+    from lighton.content_type import ContentType
     from lighton.tag import Tag
     from lighton.workspace import Workspace
 
@@ -209,6 +211,84 @@ class File(_ActiveRecord):
         for tag_id in resolve_ids(self._bound_client(), tags):
             self._api("DELETE", f"{_BASE}/{self.id}/tags/{tag_id}")
         return self
+
+    # --- content-type classification (facets) ------------------------------
+    def _facet(self, action: str, content_type: ContentType | str, **extra: object):
+        path = content_type if isinstance(content_type, str) else content_type.path
+        return self._api(
+            "POST",
+            f"{_BASE}/{self.id}/facets",
+            json={"action": action, "content_type_path": path, **extra},
+        )
+
+    def classify(self, content_type: ContentType | str) -> File:
+        """Assign a content type to this file (ContentType object or path string).
+
+        Args:
+            content_type: The content type to assign, e.g. "legal:contract:nda".
+
+        Returns:
+            `self`.
+
+        Raises:
+            ValueError: If this file has not been created/retrieved yet.
+        """
+        self._facet("classify", content_type)
+        return self
+
+    def unclassify(self, content_type: ContentType | str) -> File:
+        """Remove a content-type assignment from this file.
+
+        Args:
+            content_type: The content type to unassign (object or path string).
+
+        Returns:
+            `self`.
+        """
+        self._facet("unclassify", content_type)
+        return self
+
+    def set_attribute(
+        self, content_type: ContentType | str, name: str, value: object
+    ) -> File:
+        """Set an attribute value under an assigned content type.
+
+        Args:
+            content_type: The assigned content type (object or path string).
+            name: Attribute identifier (snake_case).
+            value: The value; shape depends on the attribute type (string, number,
+                date "YYYY-MM-DD", bool, or list[str] for multi-select).
+
+        Returns:
+            `self`.
+        """
+        self._facet("set_value", content_type, attribute_name=name, value=value)
+        return self
+
+    def clear_attribute(self, content_type: ContentType | str, name: str) -> File:
+        """Clear an attribute value under an assigned content type.
+
+        Args:
+            content_type: The assigned content type (object or path string).
+            name: Attribute identifier to clear.
+
+        Returns:
+            `self`.
+        """
+        self._facet("clear_value", content_type, attribute_name=name)
+        return self
+
+    def facets(self) -> _list[Facet]:
+        """List this file's assigned content types and their attribute values.
+
+        Returns:
+            One Facet per assigned content type (with its attribute values).
+
+        Raises:
+            ValueError: If this file has not been created/retrieved yet.
+        """
+        data = self._api("GET", f"{_BASE}/{self.id}/facets")
+        return [Facet.model_validate(ct) for ct in data.get("content_types", [])]
 
     def wait(self, timeout: float = 300.0, poll: float = 2.0) -> File:
         """Block (polling) until ingestion reaches a terminal state.
