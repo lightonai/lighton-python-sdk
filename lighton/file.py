@@ -25,9 +25,11 @@ from pydantic import Field
 from lighton._active_record import _ActiveRecord
 from lighton.enums import FileStatus
 from lighton.exceptions import LightOnError
+from lighton.tag import resolve_ids
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
+    from lighton.tag import Tag
 
 _BASE = "/api/v3/files"
 
@@ -131,6 +133,43 @@ class File(_ActiveRecord):
         return self._absorb(
             self._api("PATCH", f"{_BASE}/{self.id}", json={"title": self.title})
         )
+
+    def tag(self, tags: _list[Tag | int | str]) -> File:
+        """Assign tags to this file (POST /files/<id>/tags).
+
+        Args:
+            tags: Tags to add — Tag objects, ids, or names (mix freely). Names are
+                resolved via Tag.list() and must exist. Empty is a no-op.
+
+        Returns:
+            `self`, refreshed from the response.
+
+        Raises:
+            ValueError: If this file isn't persisted, or a name/Tag can't resolve.
+        """
+        ids = resolve_ids(self._bound_client(), tags)
+        if not ids:
+            return self
+        return self._absorb(
+            self._api("POST", f"{_BASE}/{self.id}/tags", json={"tags": ids})
+        )
+
+    def untag(self, tags: _list[Tag | int | str]) -> File:
+        """Remove tags from this file (DELETE /files/<id>/tags/<tag_id>, one each).
+
+        Args:
+            tags: Tags to remove — Tag objects, ids, or names (mix freely). Names
+                are resolved via Tag.list() and must exist. Empty is a no-op.
+
+        Returns:
+            `self`.
+
+        Raises:
+            ValueError: If this file isn't persisted, or a name/Tag can't resolve.
+        """
+        for tag_id in resolve_ids(self._bound_client(), tags):
+            self._api("DELETE", f"{_BASE}/{self.id}/tags/{tag_id}")
+        return self
 
     def wait(self, timeout: float = 300.0, poll: float = 2.0) -> File:
         """Block (polling) until ingestion reaches a terminal state.

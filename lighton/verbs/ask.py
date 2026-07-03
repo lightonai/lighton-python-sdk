@@ -10,17 +10,19 @@ from lighton.verbs._base import _VerbClient
 
 if TYPE_CHECKING:
     from lighton.file import File
+    from lighton.tag import Tag
     from lighton.workspace import Workspace
 
 
 class AskMixin(_VerbClient):
-    # ponytail: tags, content_type, and attribute filters are deferred — add the
-    # tag_id/content_type/attribute params (and streaming/async) when needed.
+    # ponytail: content_type and attribute filters are deferred — add the
+    # content_type/attribute params (and streaming/async) when needed.
     def ask(
         self,
         query: str,
         *,
         workspaces: list[Workspace | int] | None = None,
+        tags: list[Tag | int] | None = None,
         files: list[File | int] | None = None,
         max_results: int | None = None,
         model: str | None = None,
@@ -31,7 +33,10 @@ class AskMixin(_VerbClient):
             query: Natural-language question (max 1500 chars).
             workspaces: Restrict to these workspaces (Workspace objects or ids).
                 Excludes files.
-            files: Restrict to these files (File objects or ids). Excludes workspaces.
+            tags: Restrict to documents carrying any of these tags (Tag objects or
+                ids; OR-matched). Excludes files.
+            files: Restrict to these files (File objects or ids). Excludes
+                workspaces and tags.
             max_results: Chunks to retrieve for context (1–50; server default 10).
             model: LLM for answer generation; platform default if omitted.
 
@@ -41,6 +46,7 @@ class AskMixin(_VerbClient):
         body = _compact(
             query=query,
             workspace_id=_ids(workspaces),
+            tag_id=_ids(tags),
             file_id=_ids(files),
             max_results=max_results,
             model=model,

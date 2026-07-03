@@ -30,8 +30,8 @@ print(resp.answer)
 for r in resp.results:               # ranked chunks used as context
     print(r.source.filename, r.score)
 
-# search — ranked passages, no generation
-resp = client.search("termination clause", files=[123], mode=SearchMode.text)
+# search — ranked passages, no generation (scope by workspaces, tags, or files)
+resp = client.search("termination clause", tags=[7], mode=SearchMode.text)
 for r in resp.results:
     print(r.score, r.content)
 
@@ -194,6 +194,54 @@ ws = Workspace.get(client, ws.id)
 ws.delete()
 ```
 
+## Tags
+
+Tags scope `ask`/`search` to documents carrying them. Active-record style, but
+the API is **list/create/delete only** — there's no fetch-by-id, so `get()` /
+`refresh()` raise `NotImplementedError`.
+
+Manage tags:
+
+```python
+from lighton import LightOn, Tag
+
+client = LightOn()
+
+# Create
+contracts = Tag(name="contracts", description="Signed contracts").create(client)
+
+# List (follows pagination)
+for t in Tag.list(client):
+    print(t.id, t.name, t.document_count)
+
+# Delete
+contracts.delete()
+```
+
+Assign tags to a file with `tag()` / `untag()`. Both accept **`Tag` objects, bare
+ids, or tag names** (mix freely); names are resolved via `Tag.list()` under the
+hood and a name that doesn't exist raises `ValueError`:
+
+```python
+from lighton import File
+
+doc = File.get(client, 7)
+
+doc.tag([contracts])                 # Tag object
+doc.tag([12, 13])                    # bare ids
+doc.tag(["contracts", "urgent"])     # names — resolved & existence-checked
+doc.tag([contracts, 12, "urgent"])   # mixed
+
+doc.untag(["urgent"])                # remove by name
+```
+
+Scope a query to one or more tags (OR-matched — a doc matches if it has any):
+
+```python
+answer = client.ask("What are the termination terms?", tags=[contracts])
+hits = client.search("indemnification", tags=[contracts.id, 12])
+```
+
 ## API keys
 
 Same active-record style. The plaintext secret is available **only** right after `create()`.
@@ -252,6 +300,11 @@ for doc in File.list(client, workspace_id=42):
 doc = File.get(client, f.id)
 doc.title = "Q4 Report"
 doc.save()
+
+# Assign / remove tags — by Tag object, id, or name (see Tags below)
+doc.tag([7, "contracts"])
+doc.untag([12])
+
 doc.delete()
 ```
 

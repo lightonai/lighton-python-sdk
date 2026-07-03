@@ -4,7 +4,7 @@ import json
 
 import httpx
 
-from lighton import LightOn, LightOnConfiguration, Workspace
+from lighton import LightOn, LightOnConfiguration, Tag, Workspace
 
 
 def make_client(handler) -> LightOn:
@@ -29,3 +29,15 @@ def test_ask_request_and_typed_response():
     assert seen["path"] == "/api/v3/ask"
     # None params are dropped so the server applies its own defaults.
     assert seen["body"] == {"query": "meaning?", "workspace_id": [1, 2]}
+
+
+def test_ask_scopes_by_tags():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"results": [], "answer": ""})
+
+    # tags accept Tag objects or bare ids, coerced to tag_id.
+    make_client(handler).ask("q", tags=[Tag(id=3, name="legal"), 4])
+    assert seen["body"] == {"query": "q", "tag_id": [3, 4]}
