@@ -7,7 +7,7 @@ import pytest
 from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel
 
-from lighton import LightOn, LightOnConfiguration
+from lighton import ExecMode, LightOn, LightOnConfiguration
 from lighton.utils import validate_response_format_json
 
 
@@ -94,6 +94,27 @@ def test_extract_requires_exactly_one_source():
         client.extract(raw)
     with pytest.raises(ValueError):
         client.extract(raw, path="d.png", url="https://x/i.pdf")
+
+
+def test_extract_async_returns_job_and_polls_in_place():
+    seen = {}
+    raw = {"type": "object"}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST":
+            seen["body"] = json.loads(req.content)
+            return httpx.Response(202, json={"id": "extract_Kg", "status": "pending"})
+        assert req.url.path == "/api/v3/extract/extract_Kg"  # GET poll
+        assert req.url.params.get("page") == "2"
+        return httpx.Response(200, json=_OK)
+
+    job = make_client(handler).extract(raw, url="https://x/i.pdf", mode=ExecMode.ASYNC)
+    assert job.id == "extract_Kg" and not job.succeeded
+    assert seen["body"]["options"] == {"async": True}
+
+    same = job.poll(page=2)  # updates in place, returns self
+    assert same is job and job.succeeded
+    assert job.result is not None and job.result.data == [{"total": 42}]
 
 
 def test_extract_malformed_dict_schema_raises():

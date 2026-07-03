@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, overload
 
 from pydantic import BaseModel
 
+from lighton.enums import ExecMode
+from lighton.job import ExtractJob
 from lighton.types.api import ExtractJobResponse
 from lighton.utils import (
     convert_pydantic_to_response_format_json,
@@ -31,6 +33,26 @@ def _as_json_schema(schema: type[BaseModel] | dict[str, Any]) -> dict[str, Any]:
 
 
 class ExtractMixin(_VerbClient):
+    @overload
+    def extract(
+        self,
+        schema: type[BaseModel] | dict[str, Any],
+        *,
+        path: str | Path | None = ...,
+        url: str | None = ...,
+        options: dict[str, Any] | None = ...,
+        mode: Literal[ExecMode.SYNC] = ...,
+    ) -> ExtractJobResponse: ...
+    @overload
+    def extract(
+        self,
+        schema: type[BaseModel] | dict[str, Any],
+        *,
+        path: str | Path | None = ...,
+        url: str | None = ...,
+        options: dict[str, Any] | None = ...,
+        mode: Literal[ExecMode.ASYNC],
+    ) -> ExtractJob: ...
     def extract(
         self,
         schema: type[BaseModel] | dict[str, Any],
@@ -38,7 +60,8 @@ class ExtractMixin(_VerbClient):
         path: str | Path | None = None,
         url: str | None = None,
         options: dict[str, Any] | None = None,
-    ) -> ExtractJobResponse:
+        mode: ExecMode = ExecMode.SYNC,
+    ) -> ExtractJobResponse | ExtractJob:
         """POST /api/v3/extract — extract structured data from a document.
 
         Pass exactly one of:
@@ -50,15 +73,19 @@ class ExtractMixin(_VerbClient):
                 pydantic model class (converted to a vLLM `response_format` JSON
                 Schema) or a dict already holding a valid such schema.
             options: Free-form request options; currently ``{"async": bool}``.
+            mode: ExecMode.SYNC (default) runs inline and returns the extracted
+                data. ExecMode.ASYNC queues the job and returns an ``ExtractJob``
+                handle — call ``.poll()`` until ``.succeeded``.
 
         Returns:
-            The extracted data plus document metadata and usage.
+            ``ExtractJobResponse`` (with data) when sync; a pollable ``ExtractJob``
+            when async.
         """
         if (path is None) == (url is None):
             raise ValueError("extract() requires exactly one of 'path' or 'url'")
+        if mode == ExecMode.ASYNC:
+            options = {**(options or {}), "async": True}
         json_schema = _as_json_schema(schema)
-        # ponytail: sync only. Add options={"async": true} + a poll loop if large
-        # documents start timing out.
         if path is not None:
             path = Path(path)
             # multipart: schema/options ride as JSON-encoded form fields.
@@ -77,4 +104,6 @@ class ExtractMixin(_VerbClient):
             if options is not None:
                 body["options"] = options
             resp = self._request("POST", "/api/v3/extract", json=body)
+        if mode == ExecMode.ASYNC:
+            return ExtractJob._bind(self, "/api/v3/extract", resp)
         return ExtractJobResponse.model_validate(resp)

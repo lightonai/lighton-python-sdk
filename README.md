@@ -119,6 +119,52 @@ from lighton.utils import convert_pydantic_to_response_format_json
 schema = convert_pydantic_to_response_format_json(Letter)
 ```
 
+### Async jobs & polling
+
+Both `parse` and `extract` take `mode=` (an `ExecMode`, default `ExecMode.SYNC`).
+Pass `ExecMode.ASYNC` to queue the job — the call returns a `ParseJob` /
+`ExtractJob` handle instead of blocking. Call `job.poll()` to refresh it in place;
+`job.succeeded` is the one success state and `job.done` means terminal (finished
+either way). Handy for large documents that would otherwise time out.
+
+```python
+import time
+
+# queue the job — returns right away, job.status == "pending"
+job = client.extract(schema=Letter, path="big-scan.pdf", mode=ExecMode.ASYNC)
+
+while not job.poll().succeeded:
+    if job.done:                                # terminal but not completed → failure
+        raise RuntimeError(f"extract job {job.id} ended as {job.status!r}")
+    if job.progress:                            # optional live progress
+        print(f"{job.progress.percentage}% ({job.progress.pages_processed} pages)")
+    time.sleep(2)
+
+for row in job.result.data:
+    print(row)
+```
+
+`poll()` mutates the job and returns it, so `while not job.poll().succeeded:`
+reads naturally; raising once `job.done` (terminal but not successful) means a
+stuck or failed job surfaces instead of looping forever.
+
+`parse` is the same shape — on failure a `ParseJob` carries an `error` block you
+can raise with directly:
+
+```python
+import time
+
+job = client.parse(path="big.pdf", mode=ExecMode.ASYNC)
+
+while not job.poll().succeeded:
+    if job.error is not None:                   # terminal failure
+        raise RuntimeError(f"parse job {job.id} failed: {job.error.message}")
+    time.sleep(2)
+
+for page in job.result.pages:
+    print(page.index, page.markdown)
+```
+
 ## Workspaces
 
 Workspaces are active-record objects: an instance manages its own lifecycle.

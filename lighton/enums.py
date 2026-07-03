@@ -27,6 +27,33 @@ class FileStatus(StrEnum):
     updating = "updating"
 
 
+class JobStatus(StrEnum):
+    """Status of an async parse/extract job.
+
+    Only ``pending`` (initial) and ``completed`` (success) are documented by the
+    API — the schema types ``status`` as a bare string with no enum and doesn't
+    publish the failure vocabulary. This enum is for call-site comparisons
+    (StrEnum members equal their string values), NOT to validate the response
+    field, so an unrecognized server value compares unequal rather than erroring.
+    Detect terminal-failure via ``completed_at`` being set without ``completed``
+    (or, for parse, the ``error`` block) rather than a status string.
+    """
+
+    pending = "pending"
+    completed = "completed"
+
+
+class ExecMode(StrEnum):
+    """Execution mode for parse/extract: run inline or queue as an async job.
+
+    Uppercase members (unlike the other enums here) so the async member can be
+    ``ASYNC`` — lowercase ``async`` is a Python keyword and can't be a member name.
+    """
+
+    SYNC = "sync"
+    ASYNC = "async"
+
+
 class SearchMode(StrEnum):
     """Retrieval mode for search/ask."""
 

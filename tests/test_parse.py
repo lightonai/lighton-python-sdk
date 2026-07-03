@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from lighton import LightOn, LightOnConfiguration
+from lighton import ExecMode, LightOn, LightOnConfiguration
 
 
 def make_client(handler) -> LightOn:
@@ -64,3 +64,34 @@ def test_parse_path_sends_multipart(tmp_path):
     resp = make_client(handler).parse(path=f)
     assert resp.id == "p2"
     assert seen["ctype"].startswith("multipart/form-data")
+
+
+def test_parse_async_returns_job_and_polls_in_place():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST":
+            seen["body"] = json.loads(req.content)
+            return httpx.Response(
+                202,
+                json={
+                    "id": "parse_Kg",
+                    "status": "pending",
+                    "created_at": "2026-01-01T00:00:00Z",
+                },
+            )
+        assert req.url.path == "/api/v3/parse/parse_Kg"  # GET poll
+        body = _parse_body("parse_Kg", 8)
+        body["error"] = None
+        return httpx.Response(200, json=body)
+
+    job = make_client(handler).parse(
+        url="https://example.com/d.pdf", mode=ExecMode.ASYNC
+    )
+    assert job.id == "parse_Kg" and not job.succeeded and not job.done
+    assert seen["body"]["options"] == {"async": True}
+
+    same = job.poll()  # updates in place, returns self
+    assert same is job
+    assert job.succeeded and job.done
+    assert job.result is not None and job.result.pages == []
