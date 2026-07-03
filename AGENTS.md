@@ -62,7 +62,9 @@ too, no documented value set).
 
 `LightOnError` base → `LightOnConnectionError` (transport) and `LightOnAPIError`
 (non-2xx, carries `status_code`/`body`) → `AuthenticationError` (401/403),
-`NotFoundError` (404), `RateLimitError` (429), `ServerError` (5xx).
+`NotFoundError` (404), `RateLimitError` (429 — also carries `retry_after`, the
+`Retry-After` header in seconds via `_retry_after()`, or None; HTTP-date form not
+parsed), `ServerError` (5xx).
 `exceptions.from_response()` maps status → class. `MalformedResponseError`
 (sibling of `LightOnAPIError`, not a subclass) — a 2xx body that isn't JSON.
 

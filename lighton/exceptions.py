@@ -37,7 +37,22 @@ class NotFoundError(LightOnAPIError):
 
 
 class RateLimitError(LightOnAPIError):
-    """429 — too many requests."""
+    """429 — too many requests.
+
+    `retry_after` is the seconds to wait before retrying, from the `Retry-After`
+    response header when the server sends it (else None).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int,
+        body: Any = None,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message, status_code=status_code, body=body)
+        self.retry_after = retry_after
 
 
 class ServerError(LightOnAPIError):
@@ -62,7 +77,24 @@ def from_response(response: httpx.Response) -> LightOnAPIError:
     message = f"{response.status_code} {response.reason_phrase}"
     if detail:
         message = f"{message}: {detail}"
+    if cls is RateLimitError:
+        return RateLimitError(
+            message,
+            status_code=response.status_code,
+            body=body,
+            retry_after=_retry_after(response),
+        )
     return cls(message, status_code=response.status_code, body=body)
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """Seconds from the `Retry-After` header. ponytail: seconds form only — the
+    rarely-used HTTP-date form returns None; add date parsing if the API uses it."""
+    raw = response.headers.get("Retry-After")
+    try:
+        return float(raw) if raw is not None else None
+    except ValueError:
+        return None
 
 
 def _safe_body(response: httpx.Response) -> Any:

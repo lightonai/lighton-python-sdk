@@ -56,6 +56,24 @@ def test_error_mapping(status, expected):
     assert excinfo.value.status_code == status
 
 
+def test_rate_limit_exposes_retry_after():
+    client = make_client(
+        lambda req: httpx.Response(
+            429, json={"detail": "slow down"}, headers={"Retry-After": "30"}
+        )
+    )
+    with pytest.raises(exc.RateLimitError) as excinfo:
+        client.ask("q")
+    assert excinfo.value.retry_after == 30.0
+
+
+def test_rate_limit_without_header_has_none_retry_after():
+    client = make_client(lambda req: httpx.Response(429, json={"detail": "slow down"}))
+    with pytest.raises(exc.RateLimitError) as excinfo:
+        client.ask("q")
+    assert excinfo.value.retry_after is None
+
+
 def test_empty_2xx_returns_none():
     client = make_client(lambda req: httpx.Response(204))
     assert client._request("DELETE", "/x") is None
