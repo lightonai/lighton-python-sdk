@@ -235,11 +235,13 @@ doc.tag([contracts, 12, "urgent"])   # mixed
 doc.untag(["urgent"])                # remove by name
 ```
 
-Scope a query to one or more tags (OR-matched — a doc matches if it has any):
+Scope a query to one or more tags (OR-matched — a doc matches if it has any).
+Like `File.tag()`, `tags=` takes **`Tag` objects, ids, or names** (names resolved
+via `Tag.list()`, unknown ones raise):
 
 ```python
 answer = client.ask("What are the termination terms?", tags=[contracts])
-hits = client.search("indemnification", tags=[contracts.id, 12])
+hits = client.search("indemnification", tags=["contracts", 12])
 ```
 
 ## Content types

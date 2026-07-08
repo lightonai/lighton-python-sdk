@@ -41,3 +41,23 @@ def test_ask_scopes_by_tags():
     # tags accept Tag objects or bare ids, coerced to tag_id.
     make_client(handler).ask("q", tags=[Tag(id=3, name="legal"), 4])
     assert seen["body"] == {"query": "q", "tag_id": [3, 4]}
+
+
+def test_ask_scopes_by_tag_names():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and req.url.path == "/api/v3/tags":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [{"id": 3, "name": "legal", "auto_assign": True}],
+                    "next": None,
+                },
+            )
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"results": [], "answer": ""})
+
+    # names are resolved via Tag.list, mixed with a bare id
+    make_client(handler).ask("q", tags=["legal", 4])
+    assert seen["body"] == {"query": "q", "tag_id": [4, 3]}
