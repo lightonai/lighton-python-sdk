@@ -8,8 +8,9 @@ Seamlessly integrate state-of-the-art RAG directly into your software.
 
 ## What is LightOn?
 
-LightOn is a SaaS platform for retrieval-augmented generation: index your
-documents, then query them with grounded `ask`, `search`, `parse`, and `extract`.
+LightOn is an 🇪🇺 AI Lab exposing a SaaS platform for industrial-scale retrieval-augmented 
+generation: index your documents, then query them with grounded `ask`, `search` actions, process documents
+oin the fly with `parse` and `extract` for specific atomic actions.
 This SDK wraps that API. Create an account on our developer management plane 
 at [console.lighton.ai](https://console.lighton.ai) 🚀
 
