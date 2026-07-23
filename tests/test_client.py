@@ -40,7 +40,7 @@ def test_api_key_from_env(monkeypatch):
     "status,expected",
     [
         (401, exc.AuthenticationError),
-        (403, exc.AuthenticationError),
+        (403, exc.PermissionDeniedError),
         (404, exc.NotFoundError),
         (429, exc.RateLimitError),
         (500, exc.ServerError),

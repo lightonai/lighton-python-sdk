@@ -61,8 +61,10 @@ too, no documented value set).
 ## Exceptions
 
 `LightOnError` base → `LightOnConnectionError` (transport) and `LightOnAPIError`
-(non-2xx, carries `status_code`/`body`) → `AuthenticationError` (401/403),
-`NotFoundError` (404), `RateLimitError` (429 — also carries `retry_after`, the
+(non-2xx, carries `status_code`/`body`) → `AuthenticationError` (401 — bad/missing
+key), `PermissionDeniedError` (403 — authenticated but not allowed, e.g. an endpoint
+needing CompanyAdmin; a **sibling** of `AuthenticationError`, not a subclass, so 401
+and 403 are caught separately), `NotFoundError` (404), `RateLimitError` (429 — also carries `retry_after`, the
 `Retry-After` header in seconds via `_retry_after()`, or None; HTTP-date form not
 parsed), `ServerError` (5xx).
 `exceptions.from_response()` maps status → class. `MalformedResponseError`

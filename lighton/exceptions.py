@@ -29,7 +29,15 @@ class LightOnAPIError(LightOnError):
 
 
 class AuthenticationError(LightOnAPIError):
-    """401 / 403 — bad or missing API key, or insufficient permissions."""
+    """401 — bad or missing API key (the request is not authenticated)."""
+
+
+class PermissionDeniedError(LightOnAPIError):
+    """403 — authenticated, but the key lacks permission for this operation.
+
+    Distinct from `AuthenticationError`: the credentials are valid, but the caller
+    isn't allowed (e.g. an endpoint that requires the CompanyAdmin role).
+    """
 
 
 class NotFoundError(LightOnAPIError):
@@ -61,7 +69,7 @@ class ServerError(LightOnAPIError):
 
 _STATUS_MAP = {
     401: AuthenticationError,
-    403: AuthenticationError,
+    403: PermissionDeniedError,
     404: NotFoundError,
     429: RateLimitError,
 }
