@@ -10,8 +10,8 @@ Seamlessly integrate state-of-the-art RAG directly into your software.
 
 LightOn is a SaaS platform for retrieval-augmented generation: index your
 documents, then query them with grounded `ask`, `search`, `parse`, and `extract`.
-This SDK wraps that API. Manage your workspaces, files, and API keys from the
-developer management plane at [console.lighton.ai](https://console.lighton.ai).
+This SDK wraps that API. Create an account on our developer management plane 
+at [console.lighton.ai](https://console.lighton.ai) 🚀
 
 **Notes from the human maintainers:**
 > This code-base is implemented with AI assistance to allow our team to keep up with the required development celerity, however be assured that all design-patterns, architectural decisions, code-reviews and QA cycles are fully human-backed to ensure that this SDK meet our standards of quality and that we maintainers keep full knowledge of its inner workings to better serve the developer community <3
