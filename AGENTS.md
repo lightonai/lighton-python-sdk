@@ -166,12 +166,14 @@ generalize speculatively for a shape only one subclass needs.
 > release is fine on request; *triggering* one requires an explicit, current
 > instruction — prior approval for other work never carries over to this.
 
-- **One command:** `make release VERSION=X.Y.Z`. It guards (semver, clean tree, on
-  `main`, tag not already present), then `uv version` (bumps `pyproject.toml` +
+- **One command:** `make release VERSION=X.Y.Z [DESC="..."]`. It guards (semver, clean
+  tree, on `main`, tag not already present), then `uv version` (bumps `pyproject.toml` +
   `uv.lock` together), commits `chore(release): vX.Y.Z`, tags `vX.Y.Z`, and pushes.
+  `DESC` (optional) becomes the **annotated tag message** — free-text release notes.
 - The pushed tag fires `.github/workflows/release.yml`: it re-checks `tag == uv version`,
   `uv build`s the sdist+wheel, runs **git-cliff** (`cliff.toml`, conventional-commit
-  grouping) for the notes, and `gh release create`s with the artifacts attached.
+  grouping), prepends the annotated-tag message (the `DESC`) above the changelog, and
+  `gh release create`s with the artifacts attached.
 - **Version is single-source:** `pyproject.toml`. `__version__` in `lighton/__init__.py`
   reads it via `importlib.metadata.version("lighton")` — don't hard-code it back.
 - Attach-wheels only; no PyPI publish yet (add `uv publish` + a trusted publisher when wanted).
