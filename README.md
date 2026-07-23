@@ -1,6 +1,26 @@
-# lighton-python-sdk
+# LightOn Python SDK
+
+Seamlessly integrate state-of-the-art RAG directly into your software.
+
+## What is LightOn?
+
+LightOn is a SaaS platform for retrieval-augmented generation: index your
+documents, then query them with grounded `ask`, `search`, `parse`, and `extract`.
+This SDK wraps that API. Manage your workspaces, files, and API keys from the
+developer management plane at [console.lighton.ai](https://console.lighton.ai).
+
+**Notes from the human maintainers:**
+> This code-base is implemented with AI assistance to allow our team to keep up with the required development celerity, however be assured that all design-patterns, architectural decisions, code-reviews and QA cycles are fully human-backed to ensure that this SDK meet our standards of quality and that we maintainers keep full knowledge of its inner workings to better serve the developer community <3
 
 ## Quick start
+
+Install:
+
+```bash
+uv add lighton
+# or
+pip install lighton
+```
 
 ```bash
 export LIGHTON_API_KEY="..."
@@ -53,6 +73,136 @@ for page in doc.result.pages:
 # extract — structured data guided by a schema (see Extract below)
 resp = client.extract(schema=InvoiceModel, path="invoice.pdf")
 print(resp.result.data)
+```
+
+Retrieval verbs (`ask`/`search`) only see documents you've **ingested into a
+workspace** — set those up next.
+
+## Workspaces
+
+Workspaces are the containers your documents live in — retrieval scopes to them.
+They're active-record objects: an instance manages its own lifecycle.
+
+```python
+from lighton import LightOn, Workspace
+
+client = LightOn()
+
+# Create
+ws = Workspace(name="Legal", description="Contracts & NDAs").create(client)
+
+# Edit, then persist
+ws.name = "Legal EU"
+ws.save()
+
+# Re-fetch from the API
+ws.refresh()
+
+# List (follows pagination) and retrieve by id
+for w in Workspace.list(client):
+    print(w.id, w.name)
+
+ws = Workspace.get(client, ws.id)
+
+# Delete
+ws.delete()
+```
+
+## Files & ingestion
+
+Uploading a file into a workspace *is* the ingestion — there's no separate job to
+track. The returned `File` carries a processing `status`; poll it with `refresh()`,
+or `wait()` to block until it's embedded. Ingestion is **non-blocking by default**.
+
+```python
+from lighton import LightOn, Workspace, File, wait_all
+
+client = LightOn()
+ws = Workspace.get(client, 42)
+
+# Upload — returns immediately, f.status == "pending"
+f = ws.ingest(File(path="report.pdf"))
+
+f.refresh()          # poll status whenever you like
+print(f.status)      # pending → parsing → embedding → embedded
+
+# Or block until ready (opt-in)
+ws.ingest(File(path="report.pdf"), wait=True)
+
+# Bulk upload, then wait on all concurrently (threads — the SDK is sync)
+files = [ws.ingest(File(path=p)) for p in ("a.pdf", "b.pdf", "c.pdf")]
+wait_all(files)
+
+# Manage existing files (active-record, like Workspace/ApiKey)
+for doc in File.list(client, workspace_id=42):
+    print(doc.id, doc.filename, doc.status)
+
+doc = File.get(client, f.id)
+
+# Or fetch by exact filename within a workspace (must include the extension;
+# raises unless exactly one match). workspace takes a Workspace or an id.
+doc = File.get_by_name(client, "report.pdf", workspace=42)
+doc.title = "Q4 Report"
+doc.save()
+
+# Assign / remove tags — by Tag object, id, or name (see Tags below)
+doc.tag([7, "contracts"])
+doc.untag([12])
+
+doc.delete()
+```
+
+Once a file reaches `embedded`, it's retrievable by `ask`/`search`.
+
+## Async jobs & polling
+
+Two things in the SDK are asynchronous and polled: **ingestion** (a `File`'s
+`status`, via `refresh()` / `wait()` shown above) and **`parse` / `extract` run in
+async mode**, which return a *job handle* you poll. Same idea in both — kick off
+the work, poll until it reaches a terminal state.
+
+`parse` and `extract` take `mode=` (an `ExecMode`, default `ExecMode.SYNC`).
+Pass `ExecMode.ASYNC` to queue the job — the call returns a `ParseJob` /
+`ExtractJob` handle instead of blocking. Call `job.poll()` to refresh it in place;
+`job.succeeded` is the one success state and `job.done` means terminal (finished
+either way). Handy for large documents that would otherwise time out.
+
+```python
+import time
+
+# queue the job — returns right away, job.status == "pending"
+job = client.extract(schema=Letter, path="big-scan.pdf", mode=ExecMode.ASYNC)
+
+while not job.poll().succeeded:
+    if job.done:                                # terminal but not completed → failure
+        raise RuntimeError(f"extract job {job.id} ended as {job.status!r}")
+    if job.progress:                            # optional live progress
+        print(f"{job.progress.percentage}% ({job.progress.pages_processed} pages)")
+    time.sleep(2)
+
+for row in job.result.data:
+    print(row)
+```
+
+`poll()` mutates the job and returns it, so `while not job.poll().succeeded:`
+reads naturally; raising once `job.done` (terminal but not successful) means a
+stuck or failed job surfaces instead of looping forever.
+
+`parse` is the same shape — on failure a `ParseJob` carries an `error` block you
+can raise with directly:
+
+```python
+import time
+
+job = client.parse(path="big.pdf", mode=ExecMode.ASYNC)
+
+while not job.poll().succeeded:
+    if job.error is not None:                   # terminal failure
+        raise RuntimeError(f"parse job {job.id} failed: {job.error.message}")
+    time.sleep(2)
+
+for page in job.result.pages:
+    print(page.index, page.markdown)
 ```
 
 ## Extract
@@ -126,81 +276,6 @@ Need the converted schema without calling the API (to inspect or cache it)?
 from lighton.utils import convert_pydantic_to_response_format_json
 
 schema = convert_pydantic_to_response_format_json(Letter)
-```
-
-### Async jobs & polling
-
-Both `parse` and `extract` take `mode=` (an `ExecMode`, default `ExecMode.SYNC`).
-Pass `ExecMode.ASYNC` to queue the job — the call returns a `ParseJob` /
-`ExtractJob` handle instead of blocking. Call `job.poll()` to refresh it in place;
-`job.succeeded` is the one success state and `job.done` means terminal (finished
-either way). Handy for large documents that would otherwise time out.
-
-```python
-import time
-
-# queue the job — returns right away, job.status == "pending"
-job = client.extract(schema=Letter, path="big-scan.pdf", mode=ExecMode.ASYNC)
-
-while not job.poll().succeeded:
-    if job.done:                                # terminal but not completed → failure
-        raise RuntimeError(f"extract job {job.id} ended as {job.status!r}")
-    if job.progress:                            # optional live progress
-        print(f"{job.progress.percentage}% ({job.progress.pages_processed} pages)")
-    time.sleep(2)
-
-for row in job.result.data:
-    print(row)
-```
-
-`poll()` mutates the job and returns it, so `while not job.poll().succeeded:`
-reads naturally; raising once `job.done` (terminal but not successful) means a
-stuck or failed job surfaces instead of looping forever.
-
-`parse` is the same shape — on failure a `ParseJob` carries an `error` block you
-can raise with directly:
-
-```python
-import time
-
-job = client.parse(path="big.pdf", mode=ExecMode.ASYNC)
-
-while not job.poll().succeeded:
-    if job.error is not None:                   # terminal failure
-        raise RuntimeError(f"parse job {job.id} failed: {job.error.message}")
-    time.sleep(2)
-
-for page in job.result.pages:
-    print(page.index, page.markdown)
-```
-
-## Workspaces
-
-Workspaces are active-record objects: an instance manages its own lifecycle.
-
-```python
-from lighton import LightOn, Workspace
-
-client = LightOn()
-
-# Create
-ws = Workspace(name="Legal", description="Contracts & NDAs").create(client)
-
-# Edit, then persist
-ws.name = "Legal EU"
-ws.save()
-
-# Re-fetch from the API
-ws.refresh()
-
-# List (follows pagination) and retrieve by id
-for w in Workspace.list(client):
-    print(w.id, w.name)
-
-ws = Workspace.get(client, ws.id)
-
-# Delete
-ws.delete()
 ```
 
 ## Tags
@@ -314,48 +389,3 @@ key.name = "ci-pipeline-v2"
 key.save()
 key.delete()
 ```
-
-## Files & ingestion
-
-Uploading a file into a workspace *is* the ingestion — there's no separate job to
-track. The returned `File` carries a processing `status`; poll it with `refresh()`,
-or `wait()` to block until it's embedded. Ingestion is **non-blocking by default**.
-
-```python
-from lighton import LightOn, Workspace, File, wait_all
-
-client = LightOn()
-ws = Workspace.get(client, 42)
-
-# Upload — returns immediately, f.status == "pending"
-f = ws.ingest(File(path="report.pdf"))
-
-f.refresh()          # poll status whenever you like
-print(f.status)      # pending → parsing → embedding → embedded
-
-# Or block until ready (opt-in)
-ws.ingest(File(path="report.pdf"), wait=True)
-
-# Bulk upload, then wait on all concurrently (threads — the SDK is sync)
-files = [ws.ingest(File(path=p)) for p in ("a.pdf", "b.pdf", "c.pdf")]
-wait_all(files)
-
-# Manage existing files (active-record, like Workspace/ApiKey)
-for doc in File.list(client, workspace_id=42):
-    print(doc.id, doc.filename, doc.status)
-
-doc = File.get(client, f.id)
-
-# Or fetch by exact filename within a workspace (must include the extension;
-# raises unless exactly one match). workspace takes a Workspace or an id.
-doc = File.get_by_name(client, "report.pdf", workspace=42)
-doc.title = "Q4 Report"
-doc.save()
-
-# Assign / remove tags — by Tag object, id, or name (see Tags below)
-doc.tag([7, "contracts"])
-doc.untag([12])
-
-doc.delete()
-```
-
