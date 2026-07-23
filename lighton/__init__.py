@@ -1,3 +1,5 @@
+from importlib.metadata import version
+
 from lighton._client import LightOn
 from lighton.apikey import ApiKey, ApiKeyScope
 from lighton.content_type import Attribute, ContentType, Facet
@@ -15,7 +17,9 @@ from lighton.tag import Tag
 from lighton.types import LightOnConfiguration
 from lighton.workspace import Workspace
 
-__version__ = "0.1.0"
+__version__ = version(
+    "lighton"
+)  # single source of truth: pyproject.toml (via installed metadata)
 __all__ = [
     "ApiKey",
     "ApiKeyScope",

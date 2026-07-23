@@ -4,6 +4,18 @@ SCHEMA_URL = https://api.lighton.ai/docs/schema/
 test:  ## Run the test suite
 	uv run pytest
 
+.PHONY: release
+release:  ## Cut a release: make release VERSION=0.2.0 (bumps version, commits, tags, pushes -> CI builds the GitHub release)
+	@echo "$(VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "VERSION must be semver, e.g. make release VERSION=0.2.0"; exit 1; }
+	@[ -z "$$(git status --porcelain)" ] || { echo "working tree not clean — commit or stash first"; exit 1; }
+	@[ "$$(git branch --show-current)" = "main" ] || { echo "release from main only"; exit 1; }
+	@git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null && { echo "tag v$(VERSION) already exists"; exit 1; } || true
+	uv version "$(VERSION)"   # updates pyproject.toml + uv.lock in one step
+	git add pyproject.toml uv.lock
+	git commit -m "chore(release): v$(VERSION)"
+	git tag "v$(VERSION)"
+	git push origin main "v$(VERSION)"
+
 .PHONY: gen-types
 gen-types:  ## Regenerate pydantic models from the LightOn OpenAPI schema
 	mkdir -p lighton/types/api

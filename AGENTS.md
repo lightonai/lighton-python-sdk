@@ -158,6 +158,24 @@ generalize speculatively for a shape only one subclass needs.
 - Generated dir is **excluded from ty** (`[tool.ty.src]`): it's machine output validated by pydantic at runtime; chasing type-checker-perfect codegen isn't worth it. Call sites are still type-checked.
 - Treat the file as read-only; re-run `make gen-types` to update.
 
+## Release
+
+> **Agents: never cut a release unless the user explicitly asks in that message.**
+> `make release` / pushing a `v*` tag publishes a public GitHub Release and is
+> effectively irreversible. Bumping versions, editing release files, or planning a
+> release is fine on request; *triggering* one requires an explicit, current
+> instruction — prior approval for other work never carries over to this.
+
+- **One command:** `make release VERSION=X.Y.Z`. It guards (semver, clean tree, on
+  `main`, tag not already present), then `uv version` (bumps `pyproject.toml` +
+  `uv.lock` together), commits `chore(release): vX.Y.Z`, tags `vX.Y.Z`, and pushes.
+- The pushed tag fires `.github/workflows/release.yml`: it re-checks `tag == uv version`,
+  `uv build`s the sdist+wheel, runs **git-cliff** (`cliff.toml`, conventional-commit
+  grouping) for the notes, and `gh release create`s with the artifacts attached.
+- **Version is single-source:** `pyproject.toml`. `__version__` in `lighton/__init__.py`
+  reads it via `importlib.metadata.version("lighton")` — don't hard-code it back.
+- Attach-wheels only; no PyPI publish yet (add `uv publish` + a trusted publisher when wanted).
+
 ## Conventions
 
 - **Absolute imports only** (`from lighton.x import y`), no relative. Caveat: keep any runtime `LightOn` import inside a function or `TYPE_CHECKING` to avoid cycles (`__init__` imports `_client`).
