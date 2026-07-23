@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
+from lighton.enums import RelevanceScoring
 from lighton.tag import resolve_ids
 from lighton.types.api import AskResponse
 from lighton.utils import _compact, _ids
@@ -27,6 +28,7 @@ class AskMixin(_VerbClient):
         tags: list[Tag | int | str] | None = None,
         files: list[File | int] | None = None,
         max_results: int | None = None,
+        relevance_scoring: RelevanceScoring | None = None,
         model: str | None = None,
     ) -> AskResponse:
         """POST /api/v3/ask — ask a grounded question over indexed documents.
@@ -41,6 +43,8 @@ class AskMixin(_VerbClient):
             files: Restrict to these files (File objects or ids). Excludes
                 workspaces and tags.
             max_results: Chunks to retrieve for context (1–50; server default 10).
+            relevance_scoring: RelevanceScoring — .scoring_and_filtering (default),
+                .scoring_only, or .none.
             model: LLM for answer generation; platform default if omitted.
 
         Returns:
@@ -53,6 +57,7 @@ class AskMixin(_VerbClient):
             tag_id=tag_ids,
             file_id=_ids(files),
             max_results=max_results,
+            relevance_scoring=relevance_scoring,
             model=model,
         )
         return AskResponse.model_validate(

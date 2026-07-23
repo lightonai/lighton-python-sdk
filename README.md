@@ -20,7 +20,7 @@ answer = client.ask(query="What is LightOn?")
 retrieval to workspaces or specific files (objects or bare ids).
 
 ```python
-from lighton import LightOn, SearchMode
+from lighton import LightOn, RelevanceScoring, SearchMode
 
 client = LightOn()
 
@@ -30,10 +30,19 @@ print(resp.answer)
 for r in resp.results:               # ranked chunks used as context
     print(r.source.filename, r.score)
 
+# ask/search — relevance_scoring tunes the scoring step:
+#   .scoring_and_filtering (default) score + drop below the quality threshold
+#   .scoring_only                    score every candidate, return them all
+#   .none                            skip scoring (fastest; r.scores.relevance is None)
+resp = client.ask("termination terms?", relevance_scoring=RelevanceScoring.scoring_only)
+
 # search — ranked passages, no generation (scope by workspaces, tags, or files)
 resp = client.search("termination clause", tags=[7], mode=SearchMode.text)
 for r in resp.results:
     print(r.score, r.content)
+
+# .none skips scoring entirely — lowest latency when you rank client-side
+resp = client.search("indemnification", relevance_scoring=RelevanceScoring.none)
 
 # parse — document to per-page Markdown (pass a local path XOR a public URL)
 doc = client.parse(path="report.pdf")

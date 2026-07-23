@@ -5,6 +5,7 @@ import json
 import httpx
 
 from lighton import LightOn, LightOnConfiguration, Tag, Workspace
+from lighton.enums import RelevanceScoring
 
 
 def make_client(handler) -> LightOn:
@@ -29,6 +30,18 @@ def test_ask_request_and_typed_response():
     assert seen["path"] == "/api/v3/ask"
     # None params are dropped so the server applies its own defaults.
     assert seen["body"] == {"query": "meaning?", "workspace_id": [1, 2]}
+
+
+def test_ask_relevance_scoring():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"results": [], "answer": ""})
+
+    # relevance_scoring enum serializes to its string value in the body.
+    make_client(handler).ask("q", relevance_scoring=RelevanceScoring.none)
+    assert seen["body"] == {"query": "q", "relevance_scoring": "none"}
 
 
 def test_ask_scopes_by_tags():

@@ -2,28 +2,10 @@
 
 from __future__ import annotations
 
-from enum import Enum, StrEnum
 from typing import Annotated, Any
-from uuid import UUID
-
 from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field, RootModel
-
-
-class APIKeyScope(BaseModel):
-    workspace_id: int
-    workspace_name: str
-    workspace_upload_method: str
-    workspace_datasource_type: str | None
-    role: str
-
-
-class APIKeyV3Response(BaseModel):
-    id: str
-    name: str
-    prefix: str
-    created_at: AwareDatetime
-    expires_at: AwareDatetime | None
-    scopes: list[APIKeyScope]
+from enum import Enum, StrEnum
+from uuid import UUID
 
 
 class APIV3BatchErrorResponse(BaseModel):
@@ -96,74 +78,6 @@ class APIV3ValidationErrorResponse(BaseModel):
         dict[str, list[APIV3FieldError]] | None,
         Field(description="Field-level validation errors keyed by field name"),
     ] = None
-
-
-class AskRequest(BaseModel):
-    """
-    DRF serializer mixin providing ``content_type`` and ``attribute`` fields.
-
-    Compose into any request serializer via multiple inheritance::
-
-        class SearchRequestSerializer(FacetFilterFieldsMixin, serializers.Serializer):
-            query = serializers.CharField(...)
-            # content_type and attribute inherited from the mixin
-    """
-
-    content_type: Annotated[
-        list[str] | None,
-        Field(
-            description="Filter by content type path. Multiple values are OR. Exact-or-subtree matching by default (e.g. `legal` matches legal, legal:contract). Wildcards: `*contract*` (contains), `legal:contract*` (prefix)."
-        ),
-    ] = None
-    attribute: Annotated[
-        list[str] | None,
-        Field(
-            description="Filter by attribute value. **Repeated `attribute` entries are ANDed; values inside one entry are ORed with `|`** (pipe is the recommended OR delimiter — comma also works but can be ambiguous with multi-key values). Example: `attribute=fiscal_year:2024|2025&attribute=status:active` → (fiscal_year 2024 OR 2025) AND (status active). Formats: `name` (has any value), `name:value` (exact), `name:>value` / `name:>=value` (gt/gte), `name:<value` / `name:<=value` (lt/lte), `name:prefix*` (starts with, case-insensitive), `name:*text*` (contains, case-insensitive), `name:a|b` (OR). Smart dates: `filing_date:2023` (year), `filing_date:2023-06` (month). Type-aware: booleans (true/false), multi-select (membership check). Scoped: `content_type(legal:compliance).regulation:AML`."
-        ),
-    ] = None
-    query: Annotated[
-        str,
-        Field(
-            description="Natural-language question. Maximum 1500 characters.",
-            max_length=1500,
-        ),
-    ]
-    max_results: Annotated[
-        int | None,
-        Field(
-            description="Maximum number of chunks to retrieve for context. Range: 1–50.",
-            ge=1,
-            le=50,
-        ),
-    ] = 10
-    workspace_id: Annotated[
-        list[int] | None,
-        Field(
-            description="Restrict search to these workspace IDs. Cannot combine with file_id."
-        ),
-    ] = None
-    tag_id: Annotated[
-        list[int] | None,
-        Field(
-            description="Restrict to documents carrying any of these tag IDs (OR). Cannot combine with file_id."
-        ),
-    ] = None
-    file_id: Annotated[
-        list[int] | None,
-        Field(
-            description="Restrict to specific file IDs. Cannot combine with workspace_id or tag_id."
-        ),
-    ] = None
-    stream: Annotated[
-        bool | None,
-        Field(description="When true, response is streamed as Server-Sent Events."),
-    ] = False
-    model: Annotated[
-        str | None,
-        Field(
-            description="LLM used for answer generation. Standard values:\n- `mistral-large-latest`: Mistral Large 2 — flagship general-purpose model. Best answer quality (default).\n- `alfred-ft5`: Alfred FT5 — LightOn fine-tuned model, lighter and faster for straightforward questions.\nCustom model technical names (e.g. `custom-{company_id}-{uuid}`) are also accepted."
-        ),
-    ] = "mistral-large-latest"
 
 
 class AttributeDefResponse(BaseModel):
@@ -240,6 +154,75 @@ class BlankEnum(Enum):
     field_ = ""
 
 
+class BudgetAlertResponse(BaseModel):
+    model_config = ConfigDict(
+        regex_engine="python-re",
+    )
+    id: Annotated[int, Field(title="Id")]
+    is_enabled: Annotated[bool, Field(title="Is Enabled")]
+    threshold_type: Annotated[str, Field(title="Threshold Type")]
+    threshold_value: Annotated[
+        str, Field(pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$", title="Threshold Value")
+    ]
+
+
+class BudgetResponse(BaseModel):
+    model_config = ConfigDict(
+        regex_engine="python-re",
+    )
+    is_enabled: Annotated[
+        bool,
+        Field(
+            description="Whether this budget is actively enforced.", title="Is Enabled"
+        ),
+    ]
+    amount_eur: Annotated[
+        str,
+        Field(
+            description="Monthly budget cap in EUR.",
+            pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            title="Amount Eur",
+        ),
+    ]
+    currency: Annotated[
+        str | None, Field(description="ISO 4217 currency code.", title="Currency")
+    ] = "EUR"
+    current_cycle_start: Annotated[
+        str,
+        Field(
+            description="First day of the current billing cycle (ISO date).",
+            title="Current Cycle Start",
+        ),
+    ]
+    next_cycle_start: Annotated[
+        str,
+        Field(
+            description="First day of the next billing cycle (ISO date).",
+            title="Next Cycle Start",
+        ),
+    ]
+    monthly_spend_eur: Annotated[
+        str,
+        Field(
+            description="Current month's spend in EUR.",
+            pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            title="Monthly Spend Eur",
+        ),
+    ]
+    available_eur: Annotated[
+        str,
+        Field(
+            description="Remaining budget for the current cycle in EUR.",
+            pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            title="Available Eur",
+        ),
+    ]
+    alerts: Annotated[
+        list[BudgetAlertResponse] | None,
+        Field(description="Alert thresholds.", title="Alerts"),
+    ] = None
+
+
 class CommonErrorResponse(BaseModel):
     error: str
 
@@ -303,16 +286,6 @@ class ContentTypesListResponse(BaseModel):
     can_edit: Annotated[bool | None, Field(title="Can Edit")] = None
 
 
-class CreateAPIKeyV3Response(BaseModel):
-    id: str
-    name: str
-    prefix: str
-    created_at: AwareDatetime
-    expires_at: AwareDatetime | None
-    scopes: list[APIKeyScope]
-    key: str
-
-
 class CreatedBy(BaseModel):
     """
     Shallow user object for the file creator.
@@ -322,45 +295,6 @@ class CreatedBy(BaseModel):
     first_name: Annotated[str, Field(description="First name")]
     last_name: Annotated[str, Field(description="Last name")]
     username: Annotated[str, Field(description="Username")]
-
-
-class CustomMLModelCreateRequest(BaseModel):
-    name: Annotated[str, Field(description="Display name, unique within the company.")]
-    litellm_model: Annotated[
-        str,
-        Field(
-            description="LiteLLM model string, e.g. 'openai/gpt-4-turbo' or 'azure/my-deployment'."
-        ),
-    ]
-    model_type: Annotated[
-        str | None,
-        Field(
-            description="Model type (e.g. 'Large Language Model', 'Embedding Model')."
-        ),
-    ] = "Large Language Model"
-    endpoint: Annotated[
-        str | None, Field(description="Custom API base URL (api_base in LiteLLM).")
-    ] = None
-    api_key: Annotated[
-        str | None, Field(description="API key for the custom model endpoint.")
-    ] = None
-
-
-class CustomMLModelResponse(BaseModel):
-    id: Annotated[UUID, Field(description="Unique ID for this custom model.")]
-    name: Annotated[str, Field(description="Display name, unique within the company.")]
-    technical_name: Annotated[
-        str, Field(description="LiteLLM identifier (custom-{uuid}).")
-    ]
-    litellm_model: Annotated[
-        str, Field(description="LiteLLM model string, e.g. 'openai/gpt-4-turbo'.")
-    ]
-    model_type: Annotated[str, Field(description="Model type.")]
-    endpoint: Annotated[str | None, Field(description="Custom API base URL.")] = None
-    enabled: Annotated[bool, Field(description="Whether the model is active.")]
-    is_default: Annotated[
-        bool, Field(description="Whether this is the company's default custom model.")
-    ]
 
 
 class DocumentAttributesListResponse(BaseModel):
@@ -636,24 +570,6 @@ class LanguageEnum(StrEnum):
     ko = "ko"
 
 
-class MLModelHealth(BaseModel):
-    is_healthy: Annotated[
-        bool, Field(description="Whether the model is healthy and available")
-    ]
-    last_checked_at: Annotated[
-        AwareDatetime | None, Field(description="Timestamp of the last health check")
-    ]
-
-
-class MLModelToAliasMapping(BaseModel):
-    alias_id: Annotated[UUID, Field(description="ID of the alias")]
-    alias_name: Annotated[str, Field(description="Name of the alias")]
-    alias_technical_name: Annotated[
-        str,
-        Field(description="Company-wide unique technical name for this model alias"),
-    ]
-
-
 class ModeEnum(StrEnum):
     """
     * `text` - text
@@ -662,20 +578,6 @@ class ModeEnum(StrEnum):
 
     text = "text"
     vision = "vision"
-
-
-class ModelTypeEnum(StrEnum):
-    """
-    * `Large Language Model` - Large Language Model
-    * `Embedding Model` - Embedding Model
-    * `Vision Language Model` - Vision Language Model
-    * `Multi-Vector Model` - Multi-Vector Model
-    """
-
-    Large_Language_Model = "Large Language Model"
-    Embedding_Model = "Embedding Model"
-    Vision_Language_Model = "Vision Language Model"
-    Multi_Vector_Model = "Multi-Vector Model"
 
 
 class Page(BaseModel):
@@ -695,17 +597,6 @@ class Page(BaseModel):
         int, Field(description="Page number within the document (1-based).")
     ]
     markdown: Annotated[str, Field(description="Page text rendered as Markdown.")]
-
-
-class PaginatedAPIKeyV3ResponseList(BaseModel):
-    count: Annotated[int, Field(examples=[123])]
-    next: Annotated[
-        AnyUrl | None, Field(examples=["http://api.example.org/accounts/?page=4"])
-    ] = None
-    previous: Annotated[
-        AnyUrl | None, Field(examples=["http://api.example.org/accounts/?page=2"])
-    ] = None
-    results: list[APIKeyV3Response]
 
 
 class ParseAsyncResponse(BaseModel):
@@ -813,24 +704,6 @@ class ParseUsage(BaseModel):
     pages_processed: int
 
 
-class PatchedCustomMLModelUpdateRequest(BaseModel):
-    name: Annotated[
-        str | None, Field(description="Display name, unique within the company.")
-    ] = None
-    endpoint: Annotated[
-        str | None, Field(description="Custom API base URL (api_base in LiteLLM).")
-    ] = None
-    api_key: Annotated[
-        str | None, Field(description="API key for the custom model endpoint.")
-    ] = None
-    is_default: Annotated[
-        bool | None,
-        Field(
-            description="Set to true to mark this as the company's default custom model."
-        ),
-    ] = None
-
-
 class PatchedFileUpdateRequestSerializerV3(BaseModel):
     """
     Request serializer for PATCH /api/v3/files/{id} endpoint.
@@ -883,6 +756,16 @@ class RoleEnum(StrEnum):
     viewer = "viewer"
     editor = "editor"
     owner = "owner"
+
+
+class ScopeTypeEnum(StrEnum):
+    """
+    * `workspace` - workspace
+    * `global` - global
+    """
+
+    workspace = "workspace"
+    global_ = "global"
 
 
 class SearchBbox(BaseModel):
@@ -998,9 +881,9 @@ class SearchRequest(BaseModel):
     relevance_scoring: Annotated[
         RelevanceScoringEnum | None,
         Field(
-            description='Controls the cross-encoder relevance scoring step. "scoring_and_filtering" (default): Score candidates for relevance and only return those above the quality threshold. When no candidate clears the threshold, the few best-scoring candidates are returned instead of an empty result; their scores.relevance is then below the usual threshold. "scoring_only": Score every candidate for relevance but return them all, even low-scoring ones. Useful for building your own filtering logic. "none": Skip the relevance scoring step and return all candidates unfiltered. Fastest option, useful when you handle scoring yourself. Omit the field for the default; send "none" to skip. Overrides skip_rerank when both are sent.\n\n* `none` - none\n* `scoring_only` - scoring_only\n* `scoring_and_filtering` - scoring_and_filtering'
+            description='Controls the relevance scoring step. "scoring_and_filtering" (default): Score candidates for relevance and only return those above the quality threshold. When no candidate clears the threshold, the few best-scoring candidates are returned instead of an empty result; their scores.relevance is then below the usual threshold. "scoring_only": Score every candidate for relevance but return them all, even low-scoring ones. Useful for building your own filtering logic. "none": Skip the relevance scoring step and return all candidates unfiltered. Fastest option, useful when you handle scoring yourself. Omit the field for the default; send "none" to skip. Overrides skip_rerank when both are sent.\n\n* `none` - none\n* `scoring_only` - scoring_only\n* `scoring_and_filtering` - scoring_and_filtering'
         ),
-    ] = None
+    ] = "scoring_and_filtering"
     skip_rerank: Annotated[
         bool | None,
         Field(
@@ -1023,28 +906,31 @@ class SearchScores(BaseModel):
     text: Annotated[
         float | None,
         Field(
-            description="Dense text embedding similarity (1 - distance). Null in vision mode."
+            description="Semantic text similarity (0–1, higher is better). Null in vision mode."
         ),
     ]
     vision: Annotated[
         float | None,
         Field(
-            description="Vision page similarity. Null when the document has no vision index."
+            description="Vision page similarity (0–1, higher is better). Null when the document has no vision index."
         ),
     ]
     keyword: Annotated[
-        float | None, Field(description="BM25 lexical score. Null in vision mode.")
+        float | None,
+        Field(
+            description="Keyword match score (higher is better, no fixed upper bound). Null in vision mode."
+        ),
     ]
     multivector: Annotated[
         float | None,
         Field(
-            description="ColBERT multi-vector (MaxSim) score. Null when multi-vector reranking is disabled."
+            description="Token-level similarity score (higher is better, no fixed upper bound). Null when multi-vector scoring is disabled."
         ),
     ]
     relevance: Annotated[
         float | None,
         Field(
-            description='Cross-encoder reranker confidence. Populated for every returned chunk in scoring_only and scoring_and_filtering modes. Null when relevance_scoring is "none" (equivalently the deprecated skip_rerank=true) or when the reranker is unavailable.'
+            description='Relevance score (0–1, higher is better). Populated when relevance_scoring is "scoring_only" or "scoring_and_filtering". Null when relevance_scoring is "none" or when the scoring model is unavailable.'
         ),
     ]
 
@@ -1054,19 +940,24 @@ class SearchTag(BaseModel):
     name: Annotated[str, Field(description="Tag name.")]
 
 
+class SearchWarning(BaseModel):
+    code: Annotated[
+        str,
+        Field(
+            description="Signal name from the scores object that degraded (e.g. 'relevance')."
+        ),
+    ]
+    reason: Annotated[
+        str | None,
+        Field(
+            description="Machine-readable failure reason (model_not_found, timeout, service_error, unknown)."
+        ),
+    ] = None
+
+
 class SearchWorkspace(BaseModel):
     id: Annotated[int, Field(description="Workspace ID.")]
     name: Annotated[str, Field(description="Workspace name.")]
-
-
-class SourceEnum(StrEnum):
-    """
-    * `managed` - managed
-    * `custom` - custom
-    """
-
-    managed = "managed"
-    custom = "custom"
 
 
 class StandardWorkspaceCreateV3Request(BaseModel):
@@ -1218,7 +1109,13 @@ class WorkspaceInFileResponseSerializerV3(BaseModel):
 
 class WorkspaceScopedAPIKey(BaseModel):
     """
-    A workspace-scoped API key summary, exposed from the workspace side.
+    An API key that can access a single workspace, seen from the workspace side.
+
+    Covers both keys explicitly scoped to the workspace (`scope_type="workspace"`,
+    each carrying its per-workspace role) and the requesting user's globally-scoped
+    keys (`scope_type="global"`), which implicitly reach every workspace in the
+    company with the user's own role here. Reads flat dicts built by
+    `WorkspaceScopedAPIKeysMixin`, which lists explicitly-scoped keys first.
     """
 
     id: str
@@ -1227,6 +1124,7 @@ class WorkspaceScopedAPIKey(BaseModel):
     role: str
     created_at: AwareDatetime
     created_by: str
+    scope_type: ScopeTypeEnum
 
 
 class WorkspaceSummary(BaseModel):
@@ -1254,39 +1152,41 @@ class FieldChunkScoresSchema(BaseModel):
     """
     Per-signal score breakdown. Schema for OpenAPI; higher is better; null = not computed.
 
-    ``text``/``vision`` are 0..1 similarities; ``keyword`` (BM25) and ``multivector`` (ColBERT)
-    are raw scores, not bounded to 0..1. Same shape as /api/v3/search and /retrieve.
-    ``relevance`` (cross-encoder) is always null on the file-search path — DocFinder runs no
-    cross-encoder. Defined locally to avoid a circular import with the /retrieve serializer
-    module.
+    ``text``/``vision`` are 0–1 similarities; ``keyword`` and ``multivector``
+    are unbounded (higher is better). Same shape as /api/v3/search and /retrieve.
+    ``relevance`` is always null on the file-search path — no relevance scoring
+    runs on this endpoint. Defined locally to avoid a circular import with the
+    /retrieve serializer module.
     """
 
     text: Annotated[
         float | None,
         Field(
-            description="Dense text embedding similarity (1 - distance), 0..1. Null in vision mode."
+            description="Semantic text similarity (0–1, higher is better). Null in vision mode."
         ),
     ]
     vision: Annotated[
         float | None,
         Field(
-            description="Vision page similarity, 0..1. Null when the document has no vision index."
+            description="Vision page similarity (0–1, higher is better). Null when the document has no vision index."
         ),
     ]
     keyword: Annotated[
         float | None,
-        Field(description="BM25 lexical score (raw, not 0..1). Null in vision mode."),
+        Field(
+            description="Keyword match score (higher is better, no fixed upper bound). Null in vision mode."
+        ),
     ]
     multivector: Annotated[
         float | None,
         Field(
-            description="ColBERT multi-vector (MaxSim) score (raw, not 0..1). Null when multi-vector reranking is disabled."
+            description="Token-level similarity score (higher is better, no fixed upper bound). Null when multi-vector scoring is disabled."
         ),
     ]
     relevance: Annotated[
         float | None,
         Field(
-            description="Cross-encoder reranker confidence. Always null on file search — DocFinder runs no cross-encoder."
+            description="Relevance score (0–1, higher is better). Always null on file search — no relevance scoring runs on this endpoint."
         ),
     ]
 
@@ -1305,6 +1205,15 @@ class FieldDatasourceConversionRequestTypeEnum(StrEnum):
     webscrapper = "webscrapper"
 
 
+class APIKeyScope(BaseModel):
+    workspace_id: int
+    workspace_name: str
+    workspace_upload_method: str
+    workspace_datasource_type: str | None
+    role: str
+    scope_type: ScopeTypeEnum
+
+
 class APIKeyScopeRequest(BaseModel):
     """
     One entry in the `scopes` list — a workspace + a role on it.
@@ -1312,6 +1221,89 @@ class APIKeyScopeRequest(BaseModel):
 
     workspace_id: Annotated[int, Field(ge=1)]
     role: RoleEnum
+
+
+class APIKeyV3Response(BaseModel):
+    id: str
+    name: str
+    prefix: str
+    created_at: AwareDatetime
+    expires_at: AwareDatetime | None
+    scopes: list[APIKeyScope]
+
+
+class AskRequest(BaseModel):
+    """
+    DRF serializer mixin providing ``content_type`` and ``attribute`` fields.
+
+    Compose into any request serializer via multiple inheritance::
+
+        class SearchRequestSerializer(FacetFilterFieldsMixin, serializers.Serializer):
+            query = serializers.CharField(...)
+            # content_type and attribute inherited from the mixin
+    """
+
+    content_type: Annotated[
+        list[str] | None,
+        Field(
+            description="Filter by content type path. Multiple values are OR. Exact-or-subtree matching by default (e.g. `legal` matches legal, legal:contract). Wildcards: `*contract*` (contains), `legal:contract*` (prefix)."
+        ),
+    ] = None
+    attribute: Annotated[
+        list[str] | None,
+        Field(
+            description="Filter by attribute value. **Repeated `attribute` entries are ANDed; values inside one entry are ORed with `|`** (pipe is the recommended OR delimiter — comma also works but can be ambiguous with multi-key values). Example: `attribute=fiscal_year:2024|2025&attribute=status:active` → (fiscal_year 2024 OR 2025) AND (status active). Formats: `name` (has any value), `name:value` (exact), `name:>value` / `name:>=value` (gt/gte), `name:<value` / `name:<=value` (lt/lte), `name:prefix*` (starts with, case-insensitive), `name:*text*` (contains, case-insensitive), `name:a|b` (OR). Smart dates: `filing_date:2023` (year), `filing_date:2023-06` (month). Type-aware: booleans (true/false), multi-select (membership check). Scoped: `content_type(legal:compliance).regulation:AML`."
+        ),
+    ] = None
+    query: Annotated[
+        str,
+        Field(
+            description="Natural-language question. Maximum 1500 characters.",
+            max_length=1500,
+        ),
+    ]
+    max_results: Annotated[
+        int | None,
+        Field(
+            description="Maximum number of chunks to retrieve for context. Range: 1–50.",
+            ge=1,
+            le=50,
+        ),
+    ] = 10
+    workspace_id: Annotated[
+        list[int] | None,
+        Field(
+            description="Restrict search to these workspace IDs. Cannot combine with file_id."
+        ),
+    ] = None
+    tag_id: Annotated[
+        list[int] | None,
+        Field(
+            description="Restrict to documents carrying any of these tag IDs (OR). Cannot combine with file_id."
+        ),
+    ] = None
+    file_id: Annotated[
+        list[int] | None,
+        Field(
+            description="Restrict to specific file IDs. Cannot combine with workspace_id or tag_id."
+        ),
+    ] = None
+    relevance_scoring: Annotated[
+        RelevanceScoringEnum | None,
+        Field(
+            description='Controls the relevance scoring step used during retrieval. "none": Skip scoring — lowest latency, relevance score is null in each result. "scoring_only": Score every candidate but return them all. Omit for the default (score and filter).\n\n* `none` - none\n* `scoring_only` - scoring_only\n* `scoring_and_filtering` - scoring_and_filtering'
+        ),
+    ] = "scoring_and_filtering"
+    stream: Annotated[
+        bool | None,
+        Field(description="When true, response is streamed as Server-Sent Events."),
+    ] = False
+    model: Annotated[
+        str | None,
+        Field(
+            description="LLM used for answer generation. Standard values:\n- `mistral-large-latest`: Mistral Large 2 — flagship general-purpose model. Best answer quality (default).\n- `alfred-ft5`: Alfred FT5 — LightOn fine-tuned model, lighter and faster for straightforward questions.\nCustom model technical names (e.g. `custom-{company_id}-{uuid}`) are also accepted."
+        ),
+    ] = "mistral-large-latest"
 
 
 class BatchResponse(BaseModel):
@@ -1468,6 +1460,16 @@ class CreateAPIKeyV3Request(BaseModel):
             description="Optional list of `{workspace_id, role}` entries. Providing this field marks the key as workspace-scoped: it can only access the listed workspaces, with the per-workspace role shown. The requested role on each workspace is capped at the role you currently hold there."
         ),
     ] = None
+
+
+class CreateAPIKeyV3Response(BaseModel):
+    id: str
+    name: str
+    prefix: str
+    created_at: AwareDatetime
+    expires_at: AwareDatetime | None
+    scopes: list[APIKeyScope]
+    key: str
 
 
 class DocumentSummaryResponse(BaseModel):
@@ -1652,40 +1654,15 @@ class FileRetrieveResponseSerializerV3(BaseModel):
     ]
 
 
-class MLModel(BaseModel):
-    id: Annotated[UUID, Field(description="Unique ID for this model")]
-    name: Annotated[str, Field(description="Display name for this MLModel")]
-    technical_name: Annotated[
-        str,
-        Field(
-            description="Instance-wide unique technical name for this model such as it is set in the mode gateway configuration"
-        ),
-    ]
-    model_type: Annotated[
-        ModelTypeEnum,
-        Field(
-            description="Type of model (eg. 'Large Language Model', 'Embedding Model','Vision Language Model', 'Multi-Vector Model)\n\n* `Large Language Model` - Large Language Model\n* `Embedding Model` - Embedding Model\n* `Vision Language Model` - Vision Language Model\n* `Multi-Vector Model` - Multi-Vector Model"
-        ),
-    ]
-    enabled: Annotated[
-        bool, Field(description="Wether or not this model is enabled instance-wide.")
-    ]
-    is_default_for_company: Annotated[
-        bool,
-        Field(
-            description="Wether or not this model is set as default for this company."
-        ),
-    ]
-    health: Annotated[MLModelHealth, Field(description="Health status of the model")]
-    source: Annotated[
-        SourceEnum | None,
-        Field(
-            description="Whether the model is managed by the platform ('managed') or registered by the company ('custom').\n\n* `managed` - managed\n* `custom` - custom"
-        ),
-    ] = "managed"
-    linked_aliases: Annotated[
-        list[MLModelToAliasMapping], Field(description="Aliases linked to this model")
-    ]
+class PaginatedAPIKeyV3ResponseList(BaseModel):
+    count: Annotated[int, Field(examples=[123])]
+    next: Annotated[
+        AnyUrl | None, Field(examples=["http://api.example.org/accounts/?page=4"])
+    ] = None
+    previous: Annotated[
+        AnyUrl | None, Field(examples=["http://api.example.org/accounts/?page=2"])
+    ] = None
+    results: list[APIKeyV3Response]
 
 
 class PaginatedTagListResponseSerializerV3List(BaseModel):
@@ -1756,7 +1733,7 @@ class RelevantChunkScoredV3(BaseModel):
 
     Exposes ``score`` + ``scores`` (text/vision/keyword/multivector/relevance) instead of
     the legacy final_score/lexical_score/distance. ``scores.relevance`` is always null on
-    this path — DocFinder (doc-level file search) runs no cross-encoder.
+    this path — no relevance scoring runs on file search.
     """
 
     text: Annotated[str, Field(description="Chunk text content")]
@@ -1764,7 +1741,10 @@ class RelevantChunkScoredV3(BaseModel):
         str | None, Field(description="Chunk type (e.g. text/table)")
     ] = None
     score: Annotated[
-        float, Field(description="Overall fused relevance score (higher is better)")
+        float,
+        Field(
+            description="Combined retrieval score (higher is better, no fixed upper bound). No relevance scoring runs on file search."
+        ),
     ]
     scores: FieldChunkScoresSchema
 
@@ -1907,6 +1887,41 @@ class FieldDatasourceConversionRequest(BaseModel):
     ] = None
 
 
+class AskResultItem(BaseModel):
+    chunk_id: Annotated[UUID, Field(description="Chunk UUID.")]
+    content: Annotated[
+        str | None,
+        Field(description="Chunk text content. Null for vision-mode chunks."),
+    ]
+    score: Annotated[
+        float,
+        Field(
+            description="Effective relevance score — the sort key. Equals scores.relevance (0–1) when relevance scoring ran, otherwise the combined retrieval score (higher is better, no fixed upper bound). Results are ordered by this value descending."
+        ),
+    ]
+    scores: Annotated[SearchScores, Field(description="Per-signal score breakdown.")]
+    image: Annotated[
+        SearchImage | None,
+        Field(description="Page image. Present only when include_image=true."),
+    ] = None
+    source: Annotated[SearchSource, Field(description="Source document metadata.")]
+    workspace: Annotated[
+        SearchWorkspace | None, Field(description="Workspace the document belongs to.")
+    ]
+    bboxes: Annotated[
+        list[SearchBbox] | None,
+        Field(
+            description="Merged bounding boxes for the chunk's text on the source PDF. Present only when include_bboxes=true. Empty list for vision-mode, non-PDF, or pre-v2.2.1 chunks."
+        ),
+    ] = None
+    warnings: Annotated[
+        list[SearchWarning] | None,
+        Field(
+            description="Present only when a pipeline signal degrades. Absent in the happy path."
+        ),
+    ] = None
+
+
 class FileListResponseSerializerV3(BaseModel):
     id: int
     filename: Annotated[str, Field(description="Filename of the document")]
@@ -2031,10 +2046,13 @@ class SearchResultItem(BaseModel):
         str | None,
         Field(description="Chunk text content. Null for vision-mode chunks."),
     ]
-    score: Annotated[float, Field(description="Overall fused relevance score.")]
-    scores: Annotated[
-        SearchScores, Field(description="Per-signal score breakdown for this chunk.")
+    score: Annotated[
+        float,
+        Field(
+            description="Effective relevance score — the sort key. Equals scores.relevance (0–1) when relevance scoring ran, otherwise the combined retrieval score (higher is better, no fixed upper bound). Results are ordered by this value descending."
+        ),
     ]
+    scores: Annotated[SearchScores, Field(description="Per-signal score breakdown.")]
     image: Annotated[
         SearchImage | None,
         Field(description="Page image. Present only when include_image=true."),
@@ -2053,8 +2071,10 @@ class SearchResultItem(BaseModel):
 
 class AskResponse(BaseModel):
     results: Annotated[
-        list[SearchResultItem],
-        Field(description="Ranked search results used as context."),
+        list[AskResultItem],
+        Field(
+            description="Retrieved chunks used as context, ordered by relevance score descending."
+        ),
     ]
     answer: Annotated[
         str,
@@ -2064,8 +2084,15 @@ class AskResponse(BaseModel):
 
 class SearchResponse(BaseModel):
     results: Annotated[
-        list[SearchResultItem], Field(description="Ranked search results.")
+        list[SearchResultItem],
+        Field(description="Retrieved chunks, ordered by score descending."),
     ]
+    warnings: Annotated[
+        list[SearchWarning] | None,
+        Field(
+            description="Present only when a pipeline signal degrades. Absent in the happy path."
+        ),
+    ] = None
     explain: Annotated[
         dict[str, Any] | None,
         Field(
