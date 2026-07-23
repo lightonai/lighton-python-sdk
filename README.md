@@ -1,5 +1,9 @@
 # LightOn Python SDK
 
+[![Tests](https://github.com/lightonai/lighton-python-sdk/actions/workflows/tests.yml/badge.svg)](https://github.com/lightonai/lighton-python-sdk/actions/workflows/tests.yml)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://github.com/lightonai/lighton-python-sdk)
+[![Docs](https://img.shields.io/badge/docs-developers.lighton.ai-blue)](https://developers.lighton.ai)
+
 Seamlessly integrate state-of-the-art RAG directly into your software.
 
 ## What is LightOn?
