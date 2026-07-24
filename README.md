@@ -25,25 +25,27 @@ uv add lighton
 export LIGHTON_API_KEY="..."
 ```
 
+The client is a context manager — use `with` so its HTTP connection pool is closed
+on exit:
+
 ```python
 from lighton import LightOn, Workspace
 
-client = LightOn()  # reads LIGHTON_API_KEY from the environment
+with LightOn() as client:  # reads LIGHTON_API_KEY from the environment
+    # Create a workspace and ingest a folder of PDFs (glob), blocking until searchable
+    ws = Workspace(name="Docs").create(client)
+    ws.ingest_many(["docs/**/*.pdf"], wait=True)
 
-# Create a workspace and ingest a folder of PDFs (glob), blocking until searchable
-ws = Workspace(name="Docs").create(client)
-ws.ingest_many(["docs/**/*.pdf"], wait=True)
+    # Search: retrieve the most relevant passages, scoped to that workspace
+    chunks = client.search("Q4 revenues", workspaces=[ws])
+    for r in chunks.results:
+        print(r.score, r.source.filename, r.content)
 
-# Search: retrieve the most relevant passages, scoped to that workspace
-chunks = client.search("Q4 revenues", workspaces=[ws])
-for r in chunks.results:
-    print(r.score, r.source.filename, r.content)
-
-# Single-turn RAG for simple use-cases, using an LLM registered on your account
-answer = client.ask(
-    "What were Q4 revenues?", workspaces=[ws], model="mistral-large-latest"
-)
-print(answer.answer)
+    # Single-turn RAG for simple use-cases, using an LLM registered on your account
+    answer = client.ask(
+        "What were Q4 revenues?", workspaces=[ws], model="mistral-large-latest"
+    )
+    print(answer.answer)
 ```
 
 ## Ingestion
@@ -55,12 +57,12 @@ Uploading *is* the ingestion; a `File` carries a processing `status` you can pol
 ```python
 from lighton import ExecMode, File, LightOn, Workspace
 
-client = LightOn()
-ws = Workspace.get(client, 42)
+with LightOn() as client:
+    ws = Workspace.get(client, 42)
 
-# One file — non-blocking (returns immediately, status "pending")
-f = ws.ingest(File(path="report.pdf"))
-ws.ingest(File(path="report.pdf"), wait=True)   # or block until embedded
+    # One file — non-blocking (returns immediately, status "pending")
+    f = ws.ingest(File(path="report.pdf"))
+    ws.ingest(File(path="report.pdf"), wait=True)   # or block until embedded
 ```
 
 `ingest_many()` takes paths, `File`s, and **glob patterns** (mixed). Every path is
@@ -85,7 +87,9 @@ out of the box. Override it if your account differs (or pass `None` to disable p
 ```python
 from lighton import LightOnConfiguration
 
-client = LightOn(config=LightOnConfiguration(max_requests_per_minute=900))
+# override the default cap (or pass None to disable pacing)
+with LightOn(config=LightOnConfiguration(max_requests_per_minute=2000)) as client:
+    Workspace.get(client, 42).ingest_many(["docs/**/*.pdf"])
 ```
 
 Run it in the background with `mode=ExecMode.ASYNC` and poll the job's progress:
@@ -95,14 +99,16 @@ import time
 
 from lighton import BatchIngest, BatchProgress
 
-job = ws.ingest_many(["docs/**/*.pdf"], wait=True, mode=ExecMode.ASYNC)
+with LightOn() as client:
+    ws = Workspace.get(client, 42)
+    job = ws.ingest_many(["docs/**/*.pdf"], wait=True, mode=ExecMode.ASYNC)
 
-while not job.done:
-    p: BatchProgress = job.poll()
-    print(f"{p.uploaded}/{p.total} uploaded, {p.ingested} embedded, {p.failed} failed")
-    time.sleep(2)
+    while not job.done:
+        p: BatchProgress = job.poll()
+        print(f"{p.uploaded}/{p.total} uploaded, {p.ingested} embedded, {p.failed} failed")
+        time.sleep(2)
 
-result: BatchIngest = job.wait()   # once finished
+    result: BatchIngest = job.wait()   # once finished
 ```
 
 More on file management (list, fetch, tags, delete) and polling in
@@ -113,8 +119,8 @@ More on file management (list, fetch, tags, delete) and polling in
 Four actions live directly on the client. `ask` and `search` query your **indexed**
 documents — scope them with `workspaces=`, `tags=`, or `files=` (objects or bare ids).
 `parse` and `extract` process a document **on the fly**, no indexing required. Full
-reference at [developers.lighton.ai](https://developers.lighton.ai). Snippets below
-assume `client = LightOn()`.
+reference at [developers.lighton.ai](https://developers.lighton.ai). The per-verb
+snippets below assume a `client` opened with `with LightOn() as client:`.
 
 ### `ask` — single-turn RAG
 
@@ -195,26 +201,25 @@ They're active-record objects: an instance manages its own lifecycle.
 ```python
 from lighton import LightOn, Workspace
 
-client = LightOn()
+with LightOn() as client:
+    # Create
+    ws = Workspace(name="Legal", description="Contracts & NDAs").create(client)
 
-# Create
-ws = Workspace(name="Legal", description="Contracts & NDAs").create(client)
+    # Edit, then persist
+    ws.name = "Legal EU"
+    ws.save()
 
-# Edit, then persist
-ws.name = "Legal EU"
-ws.save()
+    # Re-fetch from the API
+    ws.refresh()
 
-# Re-fetch from the API
-ws.refresh()
+    # List (follows pagination) and retrieve by id
+    for w in Workspace.list(client):
+        print(w.id, w.name)
 
-# List (follows pagination) and retrieve by id
-for w in Workspace.list(client):
-    print(w.id, w.name)
+    ws = Workspace.get(client, ws.id)
 
-ws = Workspace.get(client, ws.id)
-
-# Delete
-ws.delete()
+    # Delete
+    ws.delete()
 ```
 
 ## Files & ingestion
@@ -226,39 +231,39 @@ or `wait()` to block until it's embedded. Ingestion is **non-blocking by default
 ```python
 from lighton import LightOn, Workspace, File, wait_all
 
-client = LightOn()
-ws = Workspace.get(client, 42)
+with LightOn() as client:
+    ws = Workspace.get(client, 42)
 
-# Upload — returns immediately, f.status == "pending"
-f = ws.ingest(File(path="report.pdf"))
+    # Upload — returns immediately, f.status == "pending"
+    f = ws.ingest(File(path="report.pdf"))
 
-f.refresh()          # poll status whenever you like
-print(f.status)      # pending → parsing → embedding → embedded
+    f.refresh()          # poll status whenever you like
+    print(f.status)      # pending → parsing → embedding → embedded
 
-# Or block until ready (opt-in)
-ws.ingest(File(path="report.pdf"), wait=True)
+    # Or block until ready (opt-in)
+    ws.ingest(File(path="report.pdf"), wait=True)
 
-# Bulk upload, then wait on all concurrently (threads — the SDK is sync)
-files = [ws.ingest(File(path=p)) for p in ("a.pdf", "b.pdf", "c.pdf")]
-wait_all(files)
+    # Bulk upload, then wait on all concurrently (threads — the SDK is sync)
+    files = [ws.ingest(File(path=p)) for p in ("a.pdf", "b.pdf", "c.pdf")]
+    wait_all(files)
 
-# Manage existing files (active-record, like Workspace/ApiKey)
-for doc in File.list(client, workspace_id=42):
-    print(doc.id, doc.filename, doc.status)
+    # Manage existing files (active-record, like Workspace/ApiKey)
+    for doc in File.list(client, workspace_id=42):
+        print(doc.id, doc.filename, doc.status)
 
-doc = File.get(client, f.id)
+    doc = File.get(client, f.id)
 
-# Or fetch by exact filename within a workspace (must include the extension;
-# raises unless exactly one match). workspace takes a Workspace or an id.
-doc = File.get_by_name(client, "report.pdf", workspace=42)
-doc.title = "Q4 Report"
-doc.save()
+    # Or fetch by exact filename within a workspace (must include the extension;
+    # raises unless exactly one match). workspace takes a Workspace or an id.
+    doc = File.get_by_name(client, "report.pdf", workspace=42)
+    doc.title = "Q4 Report"
+    doc.save()
 
-# Assign / remove tags — by Tag object, id, or name (see Tags below)
-doc.tag([7, "contracts"])
-doc.untag([12])
+    # Assign / remove tags — by Tag object, id, or name (see Tags below)
+    doc.tag([7, "contracts"])
+    doc.untag([12])
 
-doc.delete()
+    doc.delete()
 ```
 
 Once a file reaches `embedded`, it's retrievable by `ask`/`search`.
@@ -332,8 +337,6 @@ extraction quality. Treat them as instructions, not documentation.
 from lighton import LightOn
 from pydantic import BaseModel, Field
 
-client = LightOn()
-
 
 class Person(BaseModel):
     last_name: str = Field(description="Family name, as written in the document.")
@@ -354,29 +357,31 @@ class Letter(BaseModel):
     )
 
 
-resp = client.extract(schema=Letter, path="letter.pdf")
-# or from a public URL: client.extract(schema=Letter, url="https://example.com/letter.pdf")
-for row in resp.result.data:          # one object per page
-    print(row)
+with LightOn() as client:
+    resp = client.extract(schema=Letter, path="letter.pdf")
+    # or from a public URL: client.extract(schema=Letter, url="https://example.com/letter.pdf")
+    for row in resp.result.data:          # one object per page
+        print(row)
 ```
 
 Or pass the schema dict directly — it's validated against the JSON-Schema
 meta-schema (raises `jsonschema.SchemaError` if malformed) and sent as-is:
 
 ```python
-resp = client.extract(
-    url="https://example.com/invoice.pdf",
-    schema={
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-            "total": {"type": "number"},
-            "currency": {"type": ["string", "null"]},
+with LightOn() as client:
+    resp = client.extract(
+        url="https://example.com/invoice.pdf",
+        schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "total": {"type": "number"},
+                "currency": {"type": ["string", "null"]},
+            },
+            "required": ["total"],
         },
-        "required": ["total"],
-    },
-)
-print(resp.result.data)
+    )
+    print(resp.result.data)
 ```
 
 Need the converted schema without calling the API (to inspect or cache it)?
@@ -398,17 +403,16 @@ Manage tags:
 ```python
 from lighton import LightOn, Tag
 
-client = LightOn()
+with LightOn() as client:
+    # Create
+    contracts = Tag(name="contracts", description="Signed contracts").create(client)
 
-# Create
-contracts = Tag(name="contracts", description="Signed contracts").create(client)
+    # List (follows pagination)
+    for t in Tag.list(client):
+        print(t.id, t.name, t.document_count)
 
-# List (follows pagination)
-for t in Tag.list(client):
-    print(t.id, t.name, t.document_count)
-
-# Delete
-contracts.delete()
+    # Delete
+    contracts.delete()
 ```
 
 Assign tags to a file with `tag()` / `untag()`. Both accept **`Tag` objects, bare
@@ -480,21 +484,20 @@ Same active-record style. The plaintext secret is available **only** right after
 ```python
 from lighton import LightOn, ApiKey, ApiKeyScope, Role
 
-client = LightOn()
+with LightOn() as client:
+    key = ApiKey(
+        name="ci-pipeline",
+        scopes=[ApiKeyScope(workspace_id=42, role=Role.viewer)],  # omit for an unscoped key
+    ).create(client)
 
-key = ApiKey(
-    name="ci-pipeline",
-    scopes=[ApiKeyScope(workspace_id=42, role=Role.viewer)],  # omit for an unscoped key
-).create(client)
+    print(key.key.get_secret_value())  # plaintext secret (SecretStr) — shown once, store it now
 
-print(key.key.get_secret_value())  # plaintext secret (SecretStr) — shown once, store it now
+    # Manage existing keys
+    for k in ApiKey.list(client):
+        print(k.id, k.name, k.prefix)
 
-# Manage existing keys
-for k in ApiKey.list(client):
-    print(k.id, k.name, k.prefix)
-
-key = ApiKey.get(client, key.id)
-key.name = "ci-pipeline-v2"
-key.save()
-key.delete()
+    key = ApiKey.get(client, key.id)
+    key.name = "ci-pipeline-v2"
+    key.save()
+    key.delete()
 ```

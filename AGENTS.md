@@ -253,3 +253,7 @@ generalize speculatively for a shape only one subclass needs.
   mix a bare default with a `Field`. This applies to the curated schemas at the package
   root, NOT the generated `types/api/` (regenerated) — those already carry descriptions
   from the OpenAPI schema.
+- **Docs code examples use the context-manager pattern**: every README/docstring snippet
+  that instantiates a client does so as `with LightOn() as client:` (the client implements
+  `__enter__`/`__exit__` and closes its httpx pool on exit) — not a bare `client = LightOn()`.
+  Snippets that only *use* a client may assume one opened that way rather than repeating it.
