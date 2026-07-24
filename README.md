@@ -77,8 +77,10 @@ for fail in batch.failed:
     print(fail.source, "→", fail.error)
 ```
 
-To stay under your account's rate limit, set the cap once on the client — it paces
-every request (uploads and status polls) and applies the 429 cooldown:
+The client paces **every** request (uploads and status polls) to stay under a
+per-minute cap and applies the 429 cooldown automatically. It defaults to **1000
+requests/minute — the API's limit for most endpoints** — so batches stay within bounds
+out of the box. Override it if your account differs (or pass `None` to disable pacing):
 
 ```python
 from lighton import LightOnConfiguration

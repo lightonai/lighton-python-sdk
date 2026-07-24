@@ -10,7 +10,10 @@ from lighton import File, FileStatus, LightOn, LightOnConfiguration, Tag, Worksp
 
 def _make_client(handler):
     return LightOn(
-        "k", config=LightOnConfiguration(transport=httpx.MockTransport(handler))
+        "k",
+        config=LightOnConfiguration(
+            transport=httpx.MockTransport(handler), max_requests_per_minute=None
+        ),
     )
 
 

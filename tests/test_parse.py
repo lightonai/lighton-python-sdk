@@ -10,7 +10,10 @@ from lighton import ExecMode, LightOn, LightOnConfiguration
 
 def make_client(handler) -> LightOn:
     return LightOn(
-        "k", config=LightOnConfiguration(transport=httpx.MockTransport(handler))
+        "k",
+        config=LightOnConfiguration(
+            transport=httpx.MockTransport(handler), max_requests_per_minute=None
+        ),
     )
 
 

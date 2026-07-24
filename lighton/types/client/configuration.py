@@ -26,10 +26,11 @@ class LightOnConfiguration(BaseModel):
     )
     transport: httpx.BaseTransport | None = None  # lets tests inject MockTransport
     max_requests_per_minute: int | None = Field(
-        default=None,
+        default=1000,
         gt=0,
-        description="If set, pace ALL requests to stay under this per-minute cap "
-        "(min-interval gate applied in _request). None disables pacing.",
+        description="Pace ALL requests to stay under this per-minute cap (min-interval "
+        "gate in _request). Defaults to 1000, the API's limit for most endpoints; "
+        "override if your account differs. Set None to disable pacing entirely.",
     )
     rate_limit_retries: int = Field(
         default=3,

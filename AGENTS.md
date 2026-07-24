@@ -69,8 +69,10 @@ too, no documented value set).
   else exponential-backoff-with-jitter (`_cooldown`). 5xx is **not** retried. An optional
   `_RateGate` (thread-safe min-interval pacer, built when `max_requests_per_minute` is set)
   runs before every request, so the cap holds across *all* endpoints and concurrent threads
-  (uploads and polls alike). Both knobs are opt-in-ish: pacing is off unless a cap is given;
-  429 cooldown is on by default. Clock/sleep are injectable on `_RateGate` for tests.
+  (uploads and polls alike). `max_requests_per_minute` **defaults to 1000** (the API's limit
+  for most endpoints) — pacing is on out of the box; pass `None` to disable it. 429 cooldown
+  is also on by default. Clock/sleep are injectable on `_RateGate` for tests (which pass
+  `max_requests_per_minute=None` in the mocked-transport helpers so they don't sleep).
   Multipart `File.create` reads the file into memory (not a streamed handle) so a 429 retry
   can resend the same body — a consumed handle would resend empty.
 - **Timeout** default: `connect=5s`, read/write/pool `120s`.
@@ -167,8 +169,8 @@ schemas** (`BatchIngest`, `BatchProgress`, `FailedIngest`) are pydantic models i
   pattern is treated as a missing path. `File`/`Path` items stay literal. All results are
   deduped by resolved path, so overlapping patterns (or an explicit + globbed dup) upload once.
 - **No rate/retry logic here** — that lives in the client (`_request`), so uploads *and* polls
-  respect the cap/cooldown uniformly. To honor the 1000/min limit, the caller sets
-  `LightOnConfiguration(max_requests_per_minute=…)`; the SDK can't guess the account's cap.
+  respect the cap/cooldown uniformly. The client defaults to `max_requests_per_minute=1000`,
+  so a batch honors the API's limit out of the box; override on the config if your account differs.
 - **`mode` mirrors parse/extract** (`ExecMode`, two `@overload`s): SYNC runs inline and returns
   `BatchIngest(succeeded, failed)`; ASYNC runs in a daemon thread and returns `BatchIngestJob`
   you poll — `progress` (a `BatchProgress` snapshot), live `succeeded`/`failed`, `done`,

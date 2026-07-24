@@ -13,9 +13,11 @@ from lighton._client import _RateGate
 
 
 def make_client(handler, **cfg) -> LightOn:
-    # rate_limit_retries=0 by default so mapping tests see the single-shot response;
-    # the retry-behavior tests below opt back in.
+    # rate_limit_retries=0 so mapping tests see the single-shot response; pacing off so
+    # tests don't sleep on the gate (its behavior is covered by test_rate_gate_*). Both
+    # are overridable by the retry-behavior tests below.
     cfg.setdefault("rate_limit_retries", 0)
+    cfg.setdefault("max_requests_per_minute", None)
     return LightOn(
         "k",
         config=LightOnConfiguration(transport=httpx.MockTransport(handler), **cfg),
@@ -36,9 +38,11 @@ def test_api_key_from_env(monkeypatch):
         seen["auth"] = req.headers.get("authorization")
         return httpx.Response(200, json={"results": [], "answer": ""})
 
-    LightOn(config=LightOnConfiguration(transport=httpx.MockTransport(handler))).ask(
-        "q"
-    )
+    LightOn(
+        config=LightOnConfiguration(
+            transport=httpx.MockTransport(handler), max_requests_per_minute=None
+        )
+    ).ask("q")
     assert seen["auth"] == "Bearer envkey"
 
 
@@ -134,6 +138,16 @@ def test_rate_limit_retries_exhausted_raises(monkeypatch):
     with pytest.raises(exc.RateLimitError):
         client._request("GET", "/x")
     assert calls["n"] == 3  # initial + 2 retries
+
+
+def test_rate_limit_defaults_to_1000_and_is_overridable():
+    # Default: a gate is installed (1000/min for most endpoints).
+    assert LightOn("k")._gate is not None
+    # Explicit None disables pacing.
+    assert (
+        LightOn("k", config=LightOnConfiguration(max_requests_per_minute=None))._gate
+        is None
+    )
 
 
 def test_rate_gate_paces_requests():

@@ -33,7 +33,10 @@ def client():
         return httpx.Response(200, json={})
 
     return LightOn(
-        "k", config=LightOnConfiguration(transport=httpx.MockTransport(handler))
+        "k",
+        config=LightOnConfiguration(
+            transport=httpx.MockTransport(handler), max_requests_per_minute=None
+        ),
     )
 
 

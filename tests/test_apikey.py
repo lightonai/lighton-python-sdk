@@ -42,7 +42,10 @@ def client():
         return httpx.Response(200, json=store)
 
     return LightOn(
-        "k", config=LightOnConfiguration(transport=httpx.MockTransport(handler))
+        "k",
+        config=LightOnConfiguration(
+            transport=httpx.MockTransport(handler), max_requests_per_minute=None
+        ),
     )
 
 
@@ -81,7 +84,10 @@ def test_create_serializes_scopes_and_expiry():
         return httpx.Response(201, json={"id": "k_1", "name": "ci", "scopes": []})
 
     client = LightOn(
-        "k", config=LightOnConfiguration(transport=httpx.MockTransport(handler))
+        "k",
+        config=LightOnConfiguration(
+            transport=httpx.MockTransport(handler), max_requests_per_minute=None
+        ),
     )
     ApiKey(
         name="ci",
@@ -101,7 +107,10 @@ def test_save_sends_empty_scopes_as_null_like_create():
         return httpx.Response(200, json={"id": "k_1", "name": "ci", "scopes": []})
 
     client = LightOn(
-        "k", config=LightOnConfiguration(transport=httpx.MockTransport(handler))
+        "k",
+        config=LightOnConfiguration(
+            transport=httpx.MockTransport(handler), max_requests_per_minute=None
+        ),
     )
     key = ApiKey(name="ci")
     key.id, key._client, key.scopes = "k_1", client, []
