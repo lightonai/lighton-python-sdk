@@ -21,8 +21,6 @@ Install:
 
 ```bash
 uv add lighton
-# or
-pip install lighton
 ```
 
 ```bash
@@ -30,56 +28,164 @@ export LIGHTON_API_KEY="..."
 ```
 
 ```python
-from lighton import LightOn
+from lighton import LightOn, Workspace
 
 client = LightOn()  # reads LIGHTON_API_KEY from the environment
 
-answer = client.ask(query="What is LightOn?")
+# Create a workspace and ingest a folder of PDFs (glob), blocking until searchable
+ws = Workspace(name="Docs").create(client)
+ws.ingest_many(["docs/**/*.pdf"], wait=True)
+
+# Search: retrieve the most relevant passages, scoped to that workspace
+chunks = client.search("Q4 revenues", workspaces=[ws])
+for r in chunks.results:
+    print(r.score, r.source.filename, r.content)
+
+# Single-turn RAG for simple use-cases, using an LLM registered on your account
+answer = client.ask(
+    "What were Q4 revenues?", workspaces=[ws], model="mistral-large-latest"
+)
+print(answer.answer)
 ```
+
+## Ingestion
+
+Get documents in first — `ask`/`search` only see files ingested into a workspace.
+Upload one file with `Workspace.ingest()`, or many at once with `ingest_many()`.
+Uploading *is* the ingestion; a `File` carries a processing `status` you can poll.
+
+```python
+from lighton import ExecMode, File, LightOn, Workspace
+
+client = LightOn()
+ws = Workspace.get(client, 42)
+
+# One file — non-blocking (returns immediately, status "pending")
+f = ws.ingest(File(path="report.pdf"))
+ws.ingest(File(path="report.pdf"), wait=True)   # or block until embedded
+```
+
+`ingest_many()` takes paths, `File`s, and **glob patterns** (mixed). Every path is
+validated before any upload; it returns a `BatchIngest` with `succeeded` / `failed`:
+
+```python
+batch = ws.ingest_many(
+    ["contracts/*.pdf", "reports/**/*.docx", File(path="extra.pdf")],
+    wait=True,             # wait for each to finish embedding
+    ignore_errors=True,    # collect failures instead of raising on the first
+)
+print(len(batch.succeeded), "ok,", len(batch.failed), "failed")
+for fail in batch.failed:
+    print(fail.source, "→", fail.error)
+```
+
+To stay under your account's rate limit, set the cap once on the client — it paces
+every request (uploads and status polls) and applies the 429 cooldown:
+
+```python
+from lighton import LightOnConfiguration
+
+client = LightOn(config=LightOnConfiguration(max_requests_per_minute=900))
+```
+
+Run it in the background with `mode=ExecMode.ASYNC` and poll the job's progress:
+
+```python
+import time
+
+from lighton import BatchIngest, BatchProgress
+
+job = ws.ingest_many(["docs/**/*.pdf"], wait=True, mode=ExecMode.ASYNC)
+
+while not job.done:
+    p: BatchProgress = job.poll()
+    print(f"{p.uploaded}/{p.total} uploaded, {p.ingested} embedded, {p.failed} failed")
+    time.sleep(2)
+
+result: BatchIngest = job.wait()   # once finished
+```
+
+More on file management (list, fetch, tags, delete) and polling in
+[Files & ingestion](#files--ingestion) and [Async jobs & polling](#async-jobs--polling).
 
 ## Primary verbs
 
-`ask`, `search`, `parse`, and `extract` live directly on the client. Scope any
-retrieval to workspaces or specific files (objects or bare ids).
+Four actions live directly on the client. `ask` and `search` query your **indexed**
+documents — scope them with `workspaces=`, `tags=`, or `files=` (objects or bare ids).
+`parse` and `extract` process a document **on the fly**, no indexing required. Full
+reference at [developers.lighton.ai](https://developers.lighton.ai). Snippets below
+assume `client = LightOn()`.
+
+### `ask` — single-turn RAG
+
+Retrieval-augmented generation: retrieves the most relevant chunks and has an LLM
+answer your question grounded in them, returning the answer **plus the sources it
+used**. Reach for it when you want a direct answer over a corpus. Choose the answering
+model with `model=` (any LLM registered on your account).
 
 ```python
-from lighton import LightOn, RelevanceScoring, SearchMode
-
-client = LightOn()
-
-# ask — grounded, LLM-generated answer over indexed documents
-resp = client.ask("What were Q4 revenues?", workspaces=[42], max_results=5)
+resp = client.ask(
+    "What were Q4 revenues?",
+    workspaces=[42],
+    max_results=5,
+    model="mistral-large-latest",
+)
 print(resp.answer)
-for r in resp.results:               # ranked chunks used as context
+for r in resp.results:          # the chunks used as grounding
     print(r.source.filename, r.score)
+```
 
-# ask/search — relevance_scoring tunes the scoring step:
-#   .scoring_and_filtering (default) score + drop below the quality threshold
-#   .scoring_only                    score every candidate, return them all
-#   .none                            skip scoring (fastest; r.scores.relevance is None)
-resp = client.ask("termination terms?", relevance_scoring=RelevanceScoring.scoring_only)
+### `search` — retrieval only, no generation
 
-# search — ranked passages, no generation (scope by workspaces, tags, or files)
-resp = client.search("termination clause", tags=[7], mode=SearchMode.text)
+Hybrid semantic + lexical retrieval that returns ranked chunks with scores, source
+metadata, and (optionally) page images — but no generated answer. Use it to feed
+context into your own pipeline/LLM, build custom ranking, or surface sources to users.
+
+```python
+from lighton import RelevanceScoring, SearchMode
+
+resp = client.search(
+    "termination clause",
+    tags=[7],
+    mode=SearchMode.text,        # .text (hybrid) or .vision (page-image)
+    include_image=True,          # attach a base64 page image per chunk
+)
 for r in resp.results:
     print(r.score, r.content)
+```
 
-# .none skips scoring entirely — lowest latency when you rank client-side
-resp = client.search("indemnification", relevance_scoring=RelevanceScoring.none)
+`relevance_scoring` tunes the scoring step (applies to `ask` too):
 
-# parse — document to per-page Markdown (pass a local path XOR a public URL)
+- `.scoring_and_filtering` (default) — score, drop chunks below the quality threshold
+- `.scoring_only` — score every candidate, return them all
+- `.none` — skip scoring; lowest latency, `r.scores.relevance` is `None`
+
+### `parse` — document → Markdown
+
+One-off conversion of a PDF, Office file, or image into structured **per-page
+Markdown**, without storing it in your index. Ideal for feeding documents into another
+tool. Pass a local `path` **or** a public `url` (exactly one).
+
+```python
 doc = client.parse(path="report.pdf")
 # doc = client.parse(url="https://example.com/report.pdf")
 for page in doc.result.pages:
     print(page.index, page.markdown)
+```
 
-# extract — structured data guided by a schema (see Extract below)
+Large documents can time out synchronously — run them async and poll (see
+[Async jobs & polling](#async-jobs--polling)): `client.parse(path="big.pdf", mode=ExecMode.ASYNC)`.
+
+### `extract` — schema-guided structured data
+
+Pull specific, typed fields out of a document for a custom pipeline: you describe the
+shape (a pydantic model or a raw JSON Schema) and get back data matching it, one object
+per page. See [Extract](#extract) below for the full schema guide.
+
+```python
 resp = client.extract(schema=InvoiceModel, path="invoice.pdf")
 print(resp.result.data)
 ```
-
-Retrieval verbs (`ask`/`search`) only see documents you've **ingested into a
-workspace** — set those up next.
 
 ## Workspaces
 

@@ -158,10 +158,14 @@ class File(_ActiveRecord):
             data["parser"] = self.parser
         if tags:
             data["tags"] = tags  # httpx encodes a list as repeated form fields
-        with self.path.open("rb") as fh:
-            resp = client._request(
-                "POST", _BASE, data=data, files={"file": (self.path.name, fh)}
-            )
+        # Read into memory (not a streamed handle): a 429 retry in _request resends
+        # the same body, and a consumed handle would resend empty.
+        # ponytail: whole file in RAM during its upload; stream + reopen-per-attempt
+        # if you need to push files too large to buffer.
+        content = self.path.read_bytes()
+        resp = client._request(
+            "POST", _BASE, data=data, files={"file": (self.path.name, content)}
+        )
         self._client = client
         return self._absorb(resp)
 

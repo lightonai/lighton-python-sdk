@@ -24,17 +24,27 @@ lighton/
   tag.py             # Tag — active-record (list/create/delete only; no single GET)
   content_type.py    # ContentType/Facet/Attribute — content-type taxonomy + file facets
   file.py            # File — active-record + wait_all(); upload = ingestion
+  batch.py           # ingest_many() batch upload behavior: BatchIngestJob (threads/poll)
   job.py             # ParseJob/ExtractJob — client-bound async handles you poll()
   enums.py           # curated StrEnum vocabularies (FileStatus, Role) shared by resources
   types/             # PURE DATA schemas only (no behavior)
     client/configuration.py   # LightOnConfiguration
+    batch.py                  # BatchIngest / BatchProgress / FailedIngest (batch results)
     api/__init__.py           # GENERATED pydantic models (do not hand-edit)
 tests/               # pytest
 Makefile             # make test, make gen-types
 ```
 
 Rule: `types/` holds pure pydantic data schemas. Anything with logic/behavior
-(like `Workspace`) goes at the package root, not under `types/`.
+(like `Workspace`, or `BatchIngestJob` in `batch.py`) goes at the package root, not
+under `types/`.
+
+**Data carriers are pydantic `BaseModel`s — never `dataclasses`/`NamedTuple`/`TypedDict`.**
+One model system across the SDK (validation, `Field(description=...)`, JSON schema, IDE
+hints), and pure-data ones live under `types/`. A schema may reference a behavioral model
+as a *field type* (e.g. `types/batch.py` embeds `File`) — that's fine; it stays pure data
+itself. Construct them with keyword args (pydantic rejects positional). Use
+`arbitrary_types_allowed` for opaque non-pydantic fields (e.g. `FailedIngest.error: Exception`).
 
 `enums.py` holds hand-curated controlled vocabularies (`FileStatus`, `Role`) used as
 model field types. **`StrEnum`, not `Enum`** — members are strings, so `f.status ==
@@ -53,7 +63,16 @@ too, no documented value set).
 - **Async jobs.** `parse`/`extract` take `mode: ExecMode` (default `ExecMode.SYNC`); `ExecMode.ASYNC` (uppercase members — value `"async"`, and lowercase `async` can't be a member name) sends `options={"async": true}`. `ExecMode` lives in `enums.py` (StrEnum, exported). Async returns a **pollable job handle** (`job.py`): `parse(mode=ASYNC)` → `ParseJob`, `extract(mode=ASYNC)` → `ExtractJob`; sync returns the full response model as before. Each verb has two `@overload`s keyed on `mode: Literal[ExecMode.SYNC|ASYNC]` so callers get the exact return type (`ParseResponse` vs `ParseJob`) instead of the union — the impl signature keeps the `ExecMode` default and the `... | ...Job` return. `Job.poll(page=None)` GETs `<path>/<id>`, absorbs the response onto itself in place (mirrors `_ActiveRecord._absorb`), returns self; `.done` (terminal, `completed_at` set) and `.succeeded` (`status == completed`) read state. `_Job` is a hand-written curated model (`extra="ignore"`) holding the shared plumbing + fields; `ParseJob`/`ExtractJob` subclass it ONLY because `result` differs (`ParseResult.pages` vs `ExtractResult.data`, whose optional fields make a union ambiguous) — parse also has `error`. The job binds to the client via the `_VerbClient` transport surface (all it needs is `_request`), not a full `LightOn` (keeps the mixin's `self` assignable without a cast). `JobStatus` (enums.py) has only the documented `pending`/`completed` — the API doesn't publish the failure vocab, so it's for call-site comparison (StrEnum, unknown server values compare unequal, never validated onto the field), and the "poll until `.succeeded`, raise once `.done`" pattern keys off `completed_at`, not a failure string. No auto-wait helper — callers loop with `time.sleep` (see README); add one if asked.
 - Deferred: tag/content_type/attribute filters, streaming — add the params when needed.
 - **Config object.** Non-essential knobs (`base_url`, `timeout`, `retries`, `transport`) live in `LightOnConfiguration` (pydantic, `arbitrary_types_allowed`). `api_key` stays a direct `LightOn()` arg; falls back to `LIGHTON_API_KEY` env.
-- **Retries** via `httpx.HTTPTransport(retries=)` — connection errors only, exponential backoff. No 5xx/429 retry yet.
+- **Retries / rate limiting.** Two layers: `httpx.HTTPTransport(retries=)` handles
+  *connection* errors (exp. backoff); `_request` itself handles **HTTP 429** — retries up to
+  `rate_limit_retries` (config, default 3), waiting the `Retry-After` header when present
+  else exponential-backoff-with-jitter (`_cooldown`). 5xx is **not** retried. An optional
+  `_RateGate` (thread-safe min-interval pacer, built when `max_requests_per_minute` is set)
+  runs before every request, so the cap holds across *all* endpoints and concurrent threads
+  (uploads and polls alike). Both knobs are opt-in-ish: pacing is off unless a cap is given;
+  429 cooldown is on by default. Clock/sleep are injectable on `_RateGate` for tests.
+  Multipart `File.create` reads the file into memory (not a streamed handle) so a 429 retry
+  can resend the same body — a consumed handle would resend empty.
 - **Timeout** default: `connect=5s`, read/write/pool `120s`.
 - **URLs**: `base_url = https://api.lighton.ai` (no version), paths carry the full `/api/v3/...`. Keep the version in the path, NOT base_url — a leading-slash path against a base with a path segment triggers httpx's RFC-3986 join replacement.
 - `transport=` injection exists so tests use `httpx.MockTransport` with no network.
@@ -129,6 +148,37 @@ response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
 `GET /tags/<id>`, so the inherited `get()`/`refresh()` are overridden to raise
 `NotImplementedError` rather than 404 at runtime. `create()` posts name/description/
 auto_assign. Tags scope `ask`/`search` via `tags=` (OR-matched `tag_id`).
+
+## Batch ingestion (`batch.py`)
+
+`Workspace.ingest_many(files, *, mode=SYNC, ignore_errors=False, wait=False, timeout,
+max_workers, tags)` uploads many paths/Files concurrently. It is **not** active-record and
+**not** a server-side job — there's no batch-ingest endpoint; each file is still its own
+`File`. It's a thin client-side orchestrator over `File.create` + `File.wait` (threads).
+The **behavior** (`BatchIngestJob`, orchestration) lives in `batch.py`; the **result
+schemas** (`BatchIngest`, `BatchProgress`, `FailedIngest`) are pydantic models in
+`types/batch.py` (re-exported from `lighton` and `lighton.batch`).
+
+- **Validation up front, in the caller's thread** (`_prepare`): every local path is checked
+  before *any* upload. Missing paths raise `FileNotFoundError` (sync and async alike, so a bad
+  path fails at the call site) unless `ignore_errors`, in which case they land in `failed`.
+- **Glob strings.** A **string** item with glob chars (`*?[`) is expanded via
+  `glob.glob(recursive=True)` (so `**` works), filtered to existing files; a zero-match
+  pattern is treated as a missing path. `File`/`Path` items stay literal. All results are
+  deduped by resolved path, so overlapping patterns (or an explicit + globbed dup) upload once.
+- **No rate/retry logic here** — that lives in the client (`_request`), so uploads *and* polls
+  respect the cap/cooldown uniformly. To honor the 1000/min limit, the caller sets
+  `LightOnConfiguration(max_requests_per_minute=…)`; the SDK can't guess the account's cap.
+- **`mode` mirrors parse/extract** (`ExecMode`, two `@overload`s): SYNC runs inline and returns
+  `BatchIngest(succeeded, failed)`; ASYNC runs in a daemon thread and returns `BatchIngestJob`
+  you poll — `progress` (a `BatchProgress` snapshot), live `succeeded`/`failed`, `done`,
+  `wait()`. Both paths share `BatchIngestJob._execute`; SYNC just calls it inline (errors
+  propagate directly), ASYNC wraps it and stores the error on `_error` for `wait()` to re-raise.
+- **`wait`** = wait for ingestion to reach terminal (embedded), not just upload accepted; mirrors
+  `File.wait`. `FailedIngest` carries `source`/`error`/`file` (the File when the failure was at
+  ingestion, not upload). All mutable state is guarded by one `Lock`; read props return copies.
+- ponytail ceilings noted in-code: first error (when not `ignore_errors`) cancels un-started
+  work but lets in-flight uploads drain; not a hard cancel.
 
 ## Content types & facets
 
