@@ -17,17 +17,17 @@ This SDK wraps the LightOn API. Create an account and get an API key on [console
 
 ## Quick start
 
+Install:
 ```bash
 uv add lighton
 ```
 
+Set your API key in your environment:
 ```bash
 export LIGHTON_API_KEY="..."
 ```
 
-The client is a context manager — use `with` so its HTTP connection pool is closed
-on exit:
-
+Get your first result:
 ```python
 from lighton import LightOn, Workspace
 
