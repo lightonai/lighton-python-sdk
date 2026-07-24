@@ -24,7 +24,7 @@ from lighton.verbs import AskMixin, ExtractMixin, ParseMixin, SearchMixin
 class _RateGate:
     """Thread-safe minimum-interval pacer to hold a per-minute request ceiling.
 
-    ponytail: even spacing, not a burst-allowing token bucket — simplest thing that
+    ponytail: even spacing, not a burst-allowing token bucket, simplest thing that
     keeps concurrent threads under a per-minute cap. Swap for a token bucket if you
     need to allow short bursts. Clock/sleep are injectable so tests need no wall time.
     """
@@ -131,7 +131,7 @@ def _cooldown(retry_after: float | None, attempt: int) -> float:
     """Seconds to wait before a 429 retry: honor Retry-After, else backoff+jitter.
 
     ponytail: exponential backoff capped at 60s with small jitter; good enough for a
-    rate-limit cooldown. Uses `random` for jitter — fine at SDK runtime.
+    rate-limit cooldown. Uses `random` for jitter, fine at SDK runtime.
     """
     if retry_after is not None:
         return retry_after

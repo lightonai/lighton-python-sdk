@@ -15,6 +15,20 @@ This SDK wraps the LightOn API. Create an account and get an API key on [console
 **Note from the human maintainers:**
 > This code-base is implemented with AI assistance to allow our team to keep up with the required development celerity, however be assured that all design-patterns, architectural decisions, code-reviews and QA cycles are fully human-backed to ensure that this SDK meet our standards of quality and that we maintainers keep full knowledge of its inner workings to better serve the developer community <3
 
+## Contents
+
+- [Quick start](#quick-start)
+- [Ingestion](#ingestion)
+- [Primary verbs](#primary-verbs)
+- [Workspaces](#workspaces)
+- [Files & ingestion](#files--ingestion)
+- [Async jobs & polling](#async-jobs--polling)
+- [Extract](#extract)
+- [Tags](#tags)
+- [Content types](#content-types)
+- [API keys](#api-keys)
+- [Agent Frameworks](#agent-frameworks)
+
 ## Quick start
 
 Install:
@@ -50,7 +64,7 @@ with LightOn() as client:  # reads LIGHTON_API_KEY from the environment
 
 ## Ingestion
 
-Get documents in first — `ask`/`search` only see files ingested into a workspace.
+Get documents in first: `ask`/`search` only see files ingested into a workspace.
 Upload one file with `Workspace.ingest()`, or many at once with `ingest_many()`.
 Uploading *is* the ingestion; a `File` carries a processing `status` you can poll.
 
@@ -60,7 +74,7 @@ from lighton import ExecMode, File, LightOn, Workspace
 with LightOn() as client:
     ws = Workspace.get(client, 42)
 
-    # One file — non-blocking (returns immediately, status "pending")
+    # One file, non-blocking (returns immediately, status "pending")
     f = ws.ingest(File(path="report.pdf"))
     ws.ingest(File(path="report.pdf"), wait=True)   # or block until embedded
 ```
@@ -81,7 +95,7 @@ for fail in batch.failed:
 
 The client paces **every** request (uploads and status polls) to stay under a
 per-minute cap and applies the 429 cooldown automatically. It defaults to **1000
-requests/minute — the API's limit for most endpoints** — so batches stay within bounds
+requests/minute, the API's limit for most endpoints**, so batches stay within bounds
 out of the box. Override it if your account differs (or pass `None` to disable pacing):
 
 ```python
@@ -117,12 +131,12 @@ More on file management (list, fetch, tags, delete) and polling in
 ## Primary verbs
 
 Four actions live directly on the client. `ask` and `search` query your **indexed**
-documents — scope them with `workspaces=`, `tags=`, or `files=` (objects or bare ids).
+documents, scope them with `workspaces=`, `tags=`, or `files=` (objects or bare ids).
 `parse` and `extract` process a document **on the fly**, no indexing required. Full
 reference at [developers.lighton.ai](https://developers.lighton.ai). The per-verb
 snippets below assume a `client` opened with `with LightOn() as client:`.
 
-### `ask` — single-turn RAG
+### `ask`: single-turn RAG
 
 Retrieval-augmented generation: retrieves the most relevant chunks and has an LLM
 answer your question grounded in them, returning the answer **plus the sources it
@@ -141,10 +155,10 @@ for r in resp.results:          # the chunks used as grounding
     print(r.source.filename, r.score)
 ```
 
-### `search` — retrieval only, no generation
+### `search`: retrieval only, no generation
 
 Hybrid semantic + lexical retrieval that returns ranked chunks with scores, source
-metadata, and (optionally) page images — but no generated answer. Use it to feed
+metadata, and (optionally) page images, but no generated answer. Use it to feed
 context into your own pipeline/LLM, build custom ranking, or surface sources to users.
 
 ```python
@@ -162,11 +176,11 @@ for r in resp.results:
 
 `relevance_scoring` tunes the scoring step (applies to `ask` too):
 
-- `.scoring_and_filtering` (default) — score, drop chunks below the quality threshold
-- `.scoring_only` — score every candidate, return them all
-- `.none` — skip scoring; lowest latency, `r.scores.relevance` is `None`
+- `.scoring_and_filtering` (default): score, drop chunks below the quality threshold
+- `.scoring_only`: score every candidate, return them all
+- `.none`: skip scoring; lowest latency, `r.scores.relevance` is `None`
 
-### `parse` — document → Markdown
+### `parse`: document → Markdown
 
 One-off conversion of a PDF, Office file, or image into structured **per-page
 Markdown**, without storing it in your index. Ideal for feeding documents into another
@@ -179,10 +193,10 @@ for page in doc.result.pages:
     print(page.index, page.markdown)
 ```
 
-Large documents can time out synchronously — run them async and poll (see
+Large documents can time out synchronously, run them async and poll (see
 [Async jobs & polling](#async-jobs--polling)): `client.parse(path="big.pdf", mode=ExecMode.ASYNC)`.
 
-### `extract` — schema-guided structured data
+### `extract`: schema-guided structured data
 
 Pull specific, typed fields out of a document for a custom pipeline: you describe the
 shape (a pydantic model or a raw JSON Schema) and get back data matching it, one object
@@ -195,7 +209,7 @@ print(resp.result.data)
 
 ## Workspaces
 
-Workspaces are the containers your documents live in — retrieval scopes to them.
+Workspaces are the containers your documents live in, retrieval scopes to them.
 They're active-record objects: an instance manages its own lifecycle.
 
 ```python
@@ -224,7 +238,7 @@ with LightOn() as client:
 
 ## Files & ingestion
 
-Uploading a file into a workspace *is* the ingestion — there's no separate job to
+Uploading a file into a workspace *is* the ingestion, there's no separate job to
 track. The returned `File` carries a processing `status`; poll it with `refresh()`,
 or `wait()` to block until it's embedded. Ingestion is **non-blocking by default**.
 
@@ -234,7 +248,7 @@ from lighton import LightOn, Workspace, File, wait_all
 with LightOn() as client:
     ws = Workspace.get(client, 42)
 
-    # Upload — returns immediately, f.status == "pending"
+    # Upload, returns immediately, f.status == "pending"
     f = ws.ingest(File(path="report.pdf"))
 
     f.refresh()          # poll status whenever you like
@@ -243,7 +257,7 @@ with LightOn() as client:
     # Or block until ready (opt-in)
     ws.ingest(File(path="report.pdf"), wait=True)
 
-    # Bulk upload, then wait on all concurrently (threads — the SDK is sync)
+    # Bulk upload, then wait on all concurrently (threads, the SDK is sync)
     files = [ws.ingest(File(path=p)) for p in ("a.pdf", "b.pdf", "c.pdf")]
     wait_all(files)
 
@@ -259,7 +273,7 @@ with LightOn() as client:
     doc.title = "Q4 Report"
     doc.save()
 
-    # Assign / remove tags — by Tag object, id, or name (see Tags below)
+    # Assign / remove tags, by Tag object, id, or name (see Tags below)
     doc.tag([7, "contracts"])
     doc.untag([12])
 
@@ -272,11 +286,11 @@ Once a file reaches `embedded`, it's retrievable by `ask`/`search`.
 
 Two things in the SDK are asynchronous and polled: **ingestion** (a `File`'s
 `status`, via `refresh()` / `wait()` shown above) and **`parse` / `extract` run in
-async mode**, which return a *job handle* you poll. Same idea in both — kick off
+async mode**, which return a *job handle* you poll. Same idea in both, kick off
 the work, poll until it reaches a terminal state.
 
 `parse` and `extract` take `mode=` (an `ExecMode`, default `ExecMode.SYNC`).
-Pass `ExecMode.ASYNC` to queue the job — the call returns a `ParseJob` /
+Pass `ExecMode.ASYNC` to queue the job, the call returns a `ParseJob` /
 `ExtractJob` handle instead of blocking. Call `job.poll()` to refresh it in place;
 `job.succeeded` is the one success state and `job.done` means terminal (finished
 either way). Handy for large documents that would otherwise time out.
@@ -284,7 +298,7 @@ either way). Handy for large documents that would otherwise time out.
 ```python
 import time
 
-# queue the job — returns right away, job.status == "pending"
+# queue the job, returns right away, job.status == "pending"
 job = client.extract(schema=Letter, path="big-scan.pdf", mode=ExecMode.ASYNC)
 
 while not job.poll().succeeded:
@@ -302,7 +316,7 @@ for row in job.result.data:
 reads naturally; raising once `job.done` (terminal but not successful) means a
 stuck or failed job surfaces instead of looping forever.
 
-`parse` is the same shape — on failure a `ParseJob` carries an `error` block you
+`parse` is the same shape, on failure a `ParseJob` carries an `error` block you
 can raise with directly:
 
 ```python
@@ -321,15 +335,15 @@ for page in job.result.pages:
 
 ## Extract
 
-`extract(schema, *, path | url)` pulls structured data from a document — pass a
+`extract(schema, *, path | url)` pulls structured data from a document, pass a
 local `path` to upload (multipart) or a public `url` to fetch, exactly one (same
 as `parse`). The `schema` drives guided generation and can be **a pydantic
-model** or a **raw JSON-Schema dict** — use whichever you have.
+model** or a **raw JSON-Schema dict**, use whichever you have.
 
 A pydantic model is the easy path: nested models, `list[...]`, and `X | None`
 fields all convert to a valid vLLM `response_format` schema for you.
 
-Give every field a meaningful `Field(description=...)` — the descriptions are
+Give every field a meaningful `Field(description=...)`, the descriptions are
 carried into the schema and steer the model, so they materially improve
 extraction quality. Treat them as instructions, not documentation.
 
@@ -364,7 +378,7 @@ with LightOn() as client:
         print(row)
 ```
 
-Or pass the schema dict directly — it's validated against the JSON-Schema
+Or pass the schema dict directly, it's validated against the JSON-Schema
 meta-schema (raises `jsonschema.SchemaError` if malformed) and sent as-is:
 
 ```python
@@ -395,7 +409,7 @@ schema = convert_pydantic_to_response_format_json(Letter)
 ## Tags
 
 Tags scope `ask`/`search` to documents carrying them. Active-record style, but
-the API is **list/create/delete only** — there's no fetch-by-id, so `get()` /
+the API is **list/create/delete only**, there's no fetch-by-id, so `get()` /
 `refresh()` raise `NotImplementedError`.
 
 Manage tags:
@@ -426,13 +440,13 @@ doc = File.get_by_name(client, "nda-2026.pdf", workspace=42)
 
 doc.tag([contracts])                 # Tag object
 doc.tag([12, 13])                    # bare ids
-doc.tag(["contracts", "urgent"])     # names — resolved & existence-checked
+doc.tag(["contracts", "urgent"])     # names, resolved & existence-checked
 doc.tag([contracts, 12, "urgent"])   # mixed
 
 doc.untag(["urgent"])                # remove by name
 ```
 
-Scope a query to one or more tags (OR-matched — a doc matches if it has any).
+Scope a query to one or more tags (OR-matched, a doc matches if it has any).
 Like `File.tag()`, `tags=` takes **`Tag` objects, ids, or names** (names resolved
 via `Tag.list()`, unknown ones raise):
 
@@ -444,7 +458,7 @@ hits = client.search("indemnification", tags=["contracts", 12])
 ## Content types
 
 Content types are a company-wide taxonomy (`legal:contract:nda`, …) with typed
-attributes. Browse it with `ContentType.list()` — it returns a tree (each node has
+attributes. Browse it with `ContentType.list()`, it returns a tree (each node has
 `children`, and `attributes` when `include_attributes=True`):
 
 ```python
@@ -490,7 +504,7 @@ with LightOn() as client:
         scopes=[ApiKeyScope(workspace_id=42, role=Role.viewer)],  # omit for an unscoped key
     ).create(client)
 
-    print(key.key.get_secret_value())  # plaintext secret (SecretStr) — shown once, store it now
+    print(key.key.get_secret_value())  # plaintext secret (SecretStr), shown once, store it now
 
     # Manage existing keys
     for k in ApiKey.list(client):
@@ -500,4 +514,72 @@ with LightOn() as client:
     key.name = "ci-pipeline-v2"
     key.save()
     key.delete()
+```
+
+## Agent Frameworks
+
+LightOn drops into any agent framework as a **retrieval tool**: wrap a `client.search()`
+call that returns text the LLM can read, and hand it to your agent. (Swap `search` for
+`ask` if you'd rather the tool return a grounded answer than raw chunks.)
+
+The snippets assume a `client` (see [Quick start](#quick-start)), in a long-running
+agent, open it once for the process lifetime. They share this helper, which searches a workspace and formats
+the hits into a string:
+
+```python
+def lighton_search(query: str) -> str:
+    """Search the company's document corpus for passages relevant to the query."""
+    resp = client.search(query, workspaces=[42], max_results=5)
+    return "\n\n".join(f"[{r.source.filename}] {r.content}" for r in resp.results)
+```
+
+### LangChain
+
+```python
+# pip install langchain-core
+from langchain_core.tools import tool
+
+lighton_tool = tool(lighton_search)          # name + description come from the function
+# bind it: llm.bind_tools([lighton_tool]), or pass to create_react_agent(...)
+```
+
+### LangGraph
+
+Reuses the LangChain `lighton_tool` above, pass it to a prebuilt ReAct agent:
+
+```python
+# pip install langgraph
+from langgraph.prebuilt import create_react_agent
+
+agent = create_react_agent(model="openai:gpt-5", tools=[lighton_tool])
+result = agent.invoke({"messages": [{"role": "user", "content": "What were Q4 revenues?"}]})
+```
+
+### LlamaIndex
+
+```python
+# pip install llama-index-core
+from llama_index.core.tools import FunctionTool
+
+lighton_tool = FunctionTool.from_defaults(fn=lighton_search)
+# agent = ReActAgent.from_tools([lighton_tool], llm=...)
+```
+
+### OpenAI Agents SDK
+
+```python
+# pip install openai-agents
+from agents import Agent, function_tool
+
+agent = Agent(name="Search", tools=[function_tool(lighton_search)])
+```
+
+### CrewAI
+
+```python
+# pip install crewai
+from crewai.tools import tool
+
+lighton_tool = tool("lighton_search")(lighton_search)
+# pass tools=[lighton_tool] to your crewai Agent
 ```

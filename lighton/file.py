@@ -3,7 +3,7 @@
 Uploading a file to a workspace *is* the ingestion: POST /api/v3/files returns a
 File carrying a processing `status` (pending → converting → parsing → embedding →
 embedded, or a *_failed / fail terminal state). There is no separate ingestion-job
-resource — you poll this same File (refresh()/wait()) until it's terminal.
+resource, you poll this same File (refresh()/wait()) until it's terminal.
 
 create() is a multipart upload (binary `file` + form fields), unlike the JSON
 create() on Workspace/ApiKey.
@@ -132,7 +132,7 @@ class File(_ActiveRecord):
 
     # --- instance lifecycle ------------------------------------------------
     def create(self, client: LightOn, *, tags: _list[int] | None = None) -> File:
-        """Upload the file (multipart) — this starts ingestion.
+        """Upload the file (multipart), this starts ingestion.
 
         Args:
             client: The client to upload with and bind to `self`.
@@ -183,7 +183,7 @@ class File(_ActiveRecord):
         """Assign tags to this file (POST /files/<id>/tags).
 
         Args:
-            tags: Tags to add — Tag objects, ids, or names (mix freely). Names are
+            tags: Tags to add, Tag objects, ids, or names (mix freely). Names are
                 resolved via Tag.list() and must exist. Empty is a no-op.
 
         Returns:
@@ -203,7 +203,7 @@ class File(_ActiveRecord):
         """Remove tags from this file (DELETE /files/<id>/tags/<tag_id>, one each).
 
         Args:
-            tags: Tags to remove — Tag objects, ids, or names (mix freely). Names
+            tags: Tags to remove, Tag objects, ids, or names (mix freely). Names
                 are resolved via Tag.list() and must exist. Empty is a no-op.
 
         Returns:
@@ -297,7 +297,7 @@ class File(_ActiveRecord):
     def wait(self, timeout: float = 300.0, poll: float = 2.0) -> File:
         """Block (polling) until ingestion reaches a terminal state.
 
-        ponytail: dumb poll loop — the API offers no webhook. Run in a thread
+        ponytail: dumb poll loop, the API offers no webhook. Run in a thread
         (or use wait_all) for concurrency; the SDK stays sync.
 
         Args:
@@ -327,7 +327,7 @@ class File(_ActiveRecord):
 
 
 def wait_all(files: _list[File], timeout: float = 300.0) -> _list[File]:
-    """Wait for many ingestions concurrently (threads, not async — sync SDK).
+    """Wait for many ingestions concurrently (threads, not async, sync SDK).
 
     Args:
         files: The files to wait on; each is polled via File.wait.

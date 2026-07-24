@@ -29,11 +29,11 @@ class LightOnAPIError(LightOnError):
 
 
 class AuthenticationError(LightOnAPIError):
-    """401 — bad or missing API key (the request is not authenticated)."""
+    """401, bad or missing API key (the request is not authenticated)."""
 
 
 class PermissionDeniedError(LightOnAPIError):
-    """403 — authenticated, but the key lacks permission for this operation.
+    """403, authenticated, but the key lacks permission for this operation.
 
     Distinct from `AuthenticationError`: the credentials are valid, but the caller
     isn't allowed (e.g. an endpoint that requires the CompanyAdmin role).
@@ -41,11 +41,11 @@ class PermissionDeniedError(LightOnAPIError):
 
 
 class NotFoundError(LightOnAPIError):
-    """404 — the resource does not exist."""
+    """404, the resource does not exist."""
 
 
 class RateLimitError(LightOnAPIError):
-    """429 — too many requests.
+    """429, too many requests.
 
     `retry_after` is the seconds to wait before retrying, from the `Retry-After`
     response header when the server sends it (else None).
@@ -64,7 +64,7 @@ class RateLimitError(LightOnAPIError):
 
 
 class ServerError(LightOnAPIError):
-    """5xx — the API failed to handle the request."""
+    """5xx, the API failed to handle the request."""
 
 
 _STATUS_MAP = {
@@ -96,7 +96,7 @@ def from_response(response: httpx.Response) -> LightOnAPIError:
 
 
 def _retry_after(response: httpx.Response) -> float | None:
-    """Seconds from the `Retry-After` header. ponytail: seconds form only — the
+    """Seconds from the `Retry-After` header. ponytail: seconds form only, the
     rarely-used HTTP-date form returns None; add date parsing if the API uses it."""
     raw = response.headers.get("Retry-After")
     try:

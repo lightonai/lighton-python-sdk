@@ -1,6 +1,6 @@
 """Shared base for the verb mixins.
 
-Declares the only client surface the verbs call — `_request`. `LightOn`
+Declares the only client surface the verbs call, `_request`. `LightOn`
 overrides it with the real transport; the stub exists so the mixins type-check
 in isolation.
 """

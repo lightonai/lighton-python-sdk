@@ -1,4 +1,4 @@
-"""`ask` — grounded question answering over indexed documents."""
+"""`ask`, grounded question answering over indexed documents."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 class AskMixin(_VerbClient):
-    # ponytail: content_type and attribute filters are deferred — add the
+    # ponytail: content_type and attribute filters are deferred, add the
     # content_type/attribute params (and streaming/async) when needed.
     def ask(
         self,
@@ -31,19 +31,19 @@ class AskMixin(_VerbClient):
         relevance_scoring: RelevanceScoring | None = None,
         model: str | None = None,
     ) -> AskResponse:
-        """POST /api/v3/ask — ask a grounded question over indexed documents.
+        """POST /api/v3/ask, ask a grounded question over indexed documents.
 
         Args:
             query: Natural-language question (max 1500 chars).
             workspaces: Restrict to these workspaces (Workspace objects or ids).
                 Excludes files.
-            tags: Restrict to documents carrying any of these tags — Tag objects,
+            tags: Restrict to documents carrying any of these tags, Tag objects,
                 ids, or names (OR-matched). Names are resolved via Tag.list() and
                 must exist. Excludes files.
             files: Restrict to these files (File objects or ids). Excludes
                 workspaces and tags.
             max_results: Chunks to retrieve for context (1–50; server default 10).
-            relevance_scoring: RelevanceScoring — .scoring_and_filtering (default),
+            relevance_scoring: RelevanceScoring, .scoring_and_filtering (default),
                 .scoring_only, or .none.
             model: LLM for answer generation; platform default if omitted.
 

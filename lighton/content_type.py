@@ -2,7 +2,7 @@
 
 `ContentType` is a node in the company's content-type tree (path like
 `legal:contract:nda`, with child nodes and attribute definitions). It's read-only
-discovery — `ContentType.list()` — not an active-record: the endpoint returns a
+discovery, `ContentType.list()`, not an active-record: the endpoint returns a
 nested tree, not a paginated flat list.
 
 `Facet` is a content type *assigned to a file* together with the file's attribute
@@ -27,7 +27,7 @@ _BASE = "/api/v3/content-types"
 
 
 class Attribute(BaseModel):
-    """One attribute of a content type — a definition, or a value set on a file.
+    """One attribute of a content type, a definition, or a value set on a file.
 
     Carries both the schema (type/required/choices) and, when read from a file's
     facets, the current `value`. `value` is None for bare definitions / when unset.

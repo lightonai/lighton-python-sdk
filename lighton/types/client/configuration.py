@@ -16,7 +16,7 @@ def _default_timeout() -> httpx.Timeout:
 class LightOnConfiguration(BaseModel):
     """Non-essential client knobs. api_key stays a direct LightOn() argument."""
 
-    # transport/timeout are arbitrary httpx types — typed, not validated.
+    # transport/timeout are arbitrary httpx types, typed, not validated.
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     base_url: str = DEFAULT_BASE_URL

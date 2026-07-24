@@ -1,4 +1,4 @@
-"""Batch ingestion — upload many files into a workspace, sync or as a background job.
+"""Batch ingestion, upload many files into a workspace, sync or as a background job.
 
 `Workspace.ingest_many()` coerces paths/Files (expanding glob-pattern strings),
 validates every local path **up front** (fail fast, before any upload), then uploads
@@ -88,13 +88,13 @@ class BatchIngestJob:
 
     @property
     def succeeded(self) -> list[File]:
-        """Files that have succeeded so far (a copy — safe to iterate)."""
+        """Files that have succeeded so far (a copy, safe to iterate)."""
         with self._lock:
             return list(self._succeeded)
 
     @property
     def failed(self) -> list[FailedIngest]:
-        """Failures so far (a copy — safe to iterate), available mid-run."""
+        """Failures so far (a copy, safe to iterate), available mid-run."""
         with self._lock:
             return list(self._failed)
 
@@ -165,7 +165,7 @@ class BatchIngestJob:
 
         On the first error when `ignore_errors=False`, stop early: cancel whatever
         hasn't started and re-raise. ponytail: already-running uploads still finish
-        (the executor drains on shutdown) — we don't hard-kill in-flight requests.
+        (the executor drains on shutdown), we don't hard-kill in-flight requests.
         """
         done_ok: list[File] = []
         futures: dict[Future[File | None], File] = {
@@ -228,7 +228,7 @@ def _prepare(
     missing path raises immediately; with True it goes straight into the failed list.
 
     A **string** item containing glob characters (`*?[`) is expanded via
-    `glob.glob(..., recursive=True)` — matches are filtered to existing files, and a
+    `glob.glob(..., recursive=True)`, matches are filtered to existing files, and a
     pattern matching nothing is treated like a missing path. `File`/`Path` items are
     always literal. Results are deduped by resolved path so overlapping patterns (or a
     file listed both explicitly and by a glob) upload only once.
@@ -240,7 +240,7 @@ def _prepare(
     def take(f: File) -> None:
         assert f.path is not None
         key = f.path.resolve()
-        if key not in seen:  # dedupe by resolved path — no double uploads
+        if key not in seen:  # dedupe by resolved path, no double uploads
             seen.add(key)
             files.append(f)
 
@@ -259,7 +259,7 @@ def _prepare(
             if not hits:
                 missing.append(
                     Path(item)
-                )  # zero-match glob — surfaced like a missing path
+                )  # zero-match glob, surfaced like a missing path
             for p in hits:
                 take(File(path=p))
         else:

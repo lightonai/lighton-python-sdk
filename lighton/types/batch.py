@@ -1,7 +1,7 @@
 """Batch-ingestion result schemas.
 
-Pure data (per the `types/` rule); the behavior — concurrent upload, polling, the
-background job — lives in `lighton/batch.py`. These reference `File` as a field
+Pure data (per the `types/` rule); the behavior, concurrent upload, polling, the
+background job, lives in `lighton/batch.py`. These reference `File` as a field
 type, so `File` is imported at runtime (pydantic must resolve the annotation).
 """
 
@@ -17,7 +17,7 @@ from lighton.file import File
 class FailedIngest(BaseModel):
     """One file that didn't make it."""
 
-    # Exception is not a pydantic type — allow it as an opaque field value.
+    # Exception is not a pydantic type, allow it as an opaque field value.
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     source: Path = Field(description="The local path that failed.")

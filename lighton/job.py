@@ -1,9 +1,9 @@
-"""Async job handles for parse/extract — a client-bound object you poll() in place.
+"""Async job handles for parse/extract, a client-bound object you poll() in place.
 
 `parse(mode=ASYNC)` / `extract(mode=ASYNC)` return a `ParseJob` / `ExtractJob`
 instead of a full response. Call `poll()` to re-fetch the status and update the
 same object; `done`/`succeeded` read the terminal state. The two subclasses exist
-only because `result` differs (`ParseResult.pages` vs `ExtractResult.data`) — the
+only because `result` differs (`ParseResult.pages` vs `ExtractResult.data`), the
 polling plumbing is shared on `_Job`.
 """
 
@@ -64,7 +64,7 @@ class _Job(BaseModel):
         """Re-fetch this job's status from the API, updating this object in place.
 
         Args:
-            page: Page of ``result.data`` to fetch (extract only — results paginate).
+            page: Page of ``result.data`` to fetch (extract only, results paginate).
 
         Returns:
             `self`, refreshed with the latest status/result.
@@ -85,7 +85,7 @@ class _Job(BaseModel):
 
     @property
     def done(self) -> bool:
-        """True once the job is terminal — finished, whether it succeeded or failed."""
+        """True once the job is terminal, finished, whether it succeeded or failed."""
         return self.completed_at is not None
 
     @property

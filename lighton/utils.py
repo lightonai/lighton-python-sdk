@@ -30,7 +30,7 @@ def _inline_refs(node: Any, defs: dict[str, Any]) -> Any:
     win over the resolved target.
 
     ponytail: recurses through refs, so a self-referential model blows the stack.
-    Guided generation can't express unbounded recursion anyway — add a seen-set
+    Guided generation can't express unbounded recursion anyway, add a seen-set
     guard if such a model ever needs to reach here.
     """
     if isinstance(node, dict):
@@ -51,7 +51,7 @@ def _collapse_nullable(node: Any) -> Any:
     """Rewrite ``anyOf: [{type: X}, {type: null}]`` as ``type: [X, "null"]``.
 
     Matches the shape vLLM examples use. Only collapses when every branch is a
-    bare ``{"type": ...}`` — a branch carrying `format`/`enum`/etc. can't fold
+    bare ``{"type": ...}``, a branch carrying `format`/`enum`/etc. can't fold
     into a type array, so it's left as `anyOf`.
     """
     if isinstance(node, dict):

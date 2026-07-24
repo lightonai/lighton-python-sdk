@@ -27,7 +27,7 @@ class _ActiveRecord(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     _base: ClassVar[str]  # e.g. "/api/v3/workspaces"
-    _resource: ClassVar[str]  # e.g. "workspace" — used in error messages
+    _resource: ClassVar[str]  # e.g. "workspace", used in error messages
 
     id: int | str | None = Field(
         None, description="Server-assigned id; None until created/retrieved."
@@ -50,7 +50,7 @@ class _ActiveRecord(BaseModel):
         query: dict[str, object] | None = params or None
         items: _list[Self] = []
         path: str | None = cls._base
-        while path:  # follow pagination — no silent truncation
+        while path:  # follow pagination, no silent truncation
             page = client._request("GET", path, params=query)
             items.extend(cls._bind(client, row) for row in page["results"])
             path = page.get("next")

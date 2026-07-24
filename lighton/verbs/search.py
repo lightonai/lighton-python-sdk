@@ -1,4 +1,4 @@
-"""`search` — retrieve relevant passages (no generation)."""
+"""`search`, retrieve relevant passages (no generation)."""
 
 from __future__ import annotations
 
@@ -31,20 +31,20 @@ class SearchMixin(_VerbClient):
         include_image: bool | None = None,
         include_bboxes: bool | None = None,
     ) -> SearchResponse:
-        """POST /api/v3/search — retrieve relevant passages (no generation).
+        """POST /api/v3/search, retrieve relevant passages (no generation).
 
         Args:
             query: Natural-language search query (max 1500 chars).
             workspaces: Restrict to these workspaces (Workspace objects or ids).
                 Excludes files.
-            tags: Restrict to documents carrying any of these tags — Tag objects,
+            tags: Restrict to documents carrying any of these tags, Tag objects,
                 ids, or names (OR-matched). Names are resolved via Tag.list() and
                 must exist. Excludes files.
             files: Restrict to these files (File objects or ids). Excludes
                 workspaces and tags.
             max_results: Chunks to return after reranking (1–50; server default 10).
             mode: SearchMode.text (hybrid keyword+vector) or .vision (page-image).
-            relevance_scoring: RelevanceScoring — .scoring_and_filtering (default),
+            relevance_scoring: RelevanceScoring, .scoring_and_filtering (default),
                 .scoring_only, or .none.
             include_image: Attach a base64 page image to each result.
             include_bboxes: Attach chunk bounding boxes (PDF text-mode only).

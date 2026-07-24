@@ -1,4 +1,4 @@
-"""`extract` — extract structured data from a document, guided by a JSON schema."""
+"""`extract`, extract structured data from a document, guided by a JSON schema."""
 
 from __future__ import annotations
 
@@ -62,20 +62,20 @@ class ExtractMixin(_VerbClient):
         options: dict[str, Any] | None = None,
         mode: ExecMode = ExecMode.SYNC,
     ) -> ExtractJobResponse | ExtractJob:
-        """POST /api/v3/extract — extract structured data from a document.
+        """POST /api/v3/extract, extract structured data from a document.
 
         Pass exactly one of:
             path: A local file to upload (multipart).
             url: A publicly accessible URL to fetch.
 
         Args:
-            schema: The guided-generation schema driving extraction — either a
+            schema: The guided-generation schema driving extraction, either a
                 pydantic model class (converted to a vLLM `response_format` JSON
                 Schema) or a dict already holding a valid such schema.
             options: Free-form request options; currently ``{"async": bool}``.
             mode: ExecMode.SYNC (default) runs inline and returns the extracted
                 data. ExecMode.ASYNC queues the job and returns an ``ExtractJob``
-                handle — call ``.poll()`` until ``.succeeded``.
+                handle, call ``.poll()`` until ``.succeeded``.
 
         Returns:
             ``ExtractJobResponse`` (with data) when sync; a pollable ``ExtractJob``

@@ -1,7 +1,7 @@
 """Tag schema + management, independent of the auto-generated api types.
 
 Active-record style (see `_ActiveRecord`), but the tags API is **list/create/
-delete only** — there's no `GET /tags/<id>`, so `get()`/`refresh()` are
+delete only**, there's no `GET /tags/<id>`, so `get()`/`refresh()` are
 unsupported and raise. Tags scope `ask`/`search` (see the `tags=` param there).
 """
 

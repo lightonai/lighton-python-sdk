@@ -1,7 +1,7 @@
 """API key schema + management (active-record, see `_ActiveRecord`).
 
 The plaintext secret (`key`) is returned only by create(), once. list()/get()/
-save()/refresh() never resend it — create() is your only chance to read it.
+save()/refresh() never resend it, create() is your only chance to read it.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ class ApiKey(_ActiveRecord):
     )
     key: SecretStr | None = Field(
         None,
-        description="Plaintext secret — returned ONLY by create(), once. Use .get_secret_value().",
+        description="Plaintext secret, returned ONLY by create(), once. Use .get_secret_value().",
     )
 
     # --- instance lifecycle ------------------------------------------------
@@ -85,7 +85,7 @@ class ApiKey(_ActiveRecord):
         data = self._api(
             "PATCH",
             f"{_BASE}/{self.id}",
-            # `or None`: empty scopes means unscoped, matching create() — not [].
+            # `or None`: empty scopes means unscoped, matching create(), not [].
             json={
                 "name": self.name,
                 "scopes": [s.model_dump() for s in self.scopes] or None,

@@ -91,7 +91,7 @@ class Workspace(_ActiveRecord):
         timeout: float = 300.0,
         tags: _list[int] | None = None,
     ) -> File:
-        """Upload a File into this workspace — uploading is the ingestion.
+        """Upload a File into this workspace, uploading is the ingestion.
 
         Non-blocking by default: the returned File is 'pending', poll it via
         refresh()/wait(). Pass wait=True to block until ingestion is terminal.
@@ -158,7 +158,7 @@ class Workspace(_ActiveRecord):
         rate_limit_retries), so they apply across uploads and status polls alike.
 
         Args:
-            files: Items to ingest — File objects, path strings, or Paths (mixed). A
+            files: Items to ingest, File objects, path strings, or Paths (mixed). A
                 string with glob characters (`*?[`) is expanded (recursive `**`
                 supported) to its matching files; duplicates are ignored.
             mode: ExecMode.SYNC blocks and returns a BatchIngest; ExecMode.ASYNC

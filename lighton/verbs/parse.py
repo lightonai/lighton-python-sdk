@@ -1,4 +1,4 @@
-"""`parse` — parse a document into per-page text (sync, or async job you poll)."""
+"""`parse`, parse a document into per-page text (sync, or async job you poll)."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ class ParseMixin(_VerbClient):
         url: str | None = None,
         mode: ExecMode = ExecMode.SYNC,
     ) -> ParseResponse | ParseJob:
-        """POST /api/v3/parse — parse a document into per-page text.
+        """POST /api/v3/parse, parse a document into per-page text.
 
         Pass exactly one of:
             path: A local file to upload (multipart).
@@ -45,7 +45,7 @@ class ParseMixin(_VerbClient):
         Args:
             mode: ExecMode.SYNC (default) runs inline and returns the full
                 ``ParseResponse``. ExecMode.ASYNC queues the job and returns a
-                ``ParseJob`` handle — call ``.poll()`` until ``.succeeded``.
+                ``ParseJob`` handle, call ``.poll()`` until ``.succeeded``.
 
         Returns:
             ``ParseResponse`` when sync; a pollable ``ParseJob`` when async.

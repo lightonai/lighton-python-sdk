@@ -1,7 +1,7 @@
 """Curated status/role vocabularies shared across resources.
 
 StrEnum, not Enum: members ARE strings, so `file.status == "embedded"` and
-membership in a plain-string set keep working — no `.value` needed at call sites.
+membership in a plain-string set keep working, no `.value` needed at call sites.
 Values mirror the generated api types (StatusEnum, RoleEnum); regenerate those
 and update here if the server vocabulary changes.
 """
@@ -31,7 +31,7 @@ class JobStatus(StrEnum):
     """Status of an async parse/extract job.
 
     Only ``pending`` (initial) and ``completed`` (success) are documented by the
-    API — the schema types ``status`` as a bare string with no enum and doesn't
+    API, the schema types ``status`` as a bare string with no enum and doesn't
     publish the failure vocabulary. This enum is for call-site comparisons
     (StrEnum members equal their string values), NOT to validate the response
     field, so an unrecognized server value compares unequal rather than erroring.
@@ -47,7 +47,7 @@ class ExecMode(StrEnum):
     """Execution mode for parse/extract: run inline or queue as an async job.
 
     Uppercase members (unlike the other enums here) so the async member can be
-    ``ASYNC`` — lowercase ``async`` is a Python keyword and can't be a member name.
+    ``ASYNC``, lowercase ``async`` is a Python keyword and can't be a member name.
     """
 
     SYNC = "sync"
