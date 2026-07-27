@@ -1,3 +1,6 @@
+# commit-msg is needed for the conventional-commit hook; `pre-commit install` installs both.
+default_install_hook_types: [pre-commit, commit-msg]
+
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.19  # set by `pre-commit autoupdate`
@@ -11,6 +14,24 @@ repos:
       - id: ty
   - repo: local
     hooks:
+      # ponytail: grep against the spec regex instead of the conventional-pre-commit
+      # repo — two lines, one fewer pinned dependency to autoupdate.
+      - id: conventional-commit
+        name: conventional commit message
+        entry: >-
+          bash -c 'head -1 "$1" | grep -qE "^((Merge|Revert|fixup!|squash!) |(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\(.+\))?!?: .+)"
+          || { echo "commit message must follow Conventional Commits, e.g. feat(client): add retries"; exit 1; }' --
+        language: system
+        stages: [commit-msg]
+      - id: conventional-branch
+        name: conventional branch name
+        entry: >-
+          bash -c 'b=$(git branch --show-current);
+          [ -z "$b" ] || echo "$b" | grep -qE "^(main|master|develop|(feature|bugfix|hotfix|release|chore)/[a-z0-9._/-]+)$"
+          || { echo "branch \"$b\" must be <type>/<description>, e.g. feature/add-retries (types: feature, bugfix, hotfix, release, chore)"; exit 1; }' --
+        language: system
+        pass_filenames: false
+        always_run: true  # branch name is not tied to any changed file
       - id: pytest
         name: pytest
         entry: uv run pytest
