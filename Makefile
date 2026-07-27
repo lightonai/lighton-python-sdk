@@ -4,6 +4,24 @@ SCHEMA_URL = https://api.lighton.ai/docs/schema/
 test:  ## Run the test suite
 	uv run pytest
 
+.PHONY: install-hooks
+install-hooks:  ## Install the pre-commit git hooks
+	uv run pre-commit install
+
+.PHONY: lint
+lint:  ## Check formatting and lint rules
+	uv run ruff format --check .
+	uv run ruff check .
+
+.PHONY: lint-fix
+lint-fix:  ## Auto-fix lint issues and format
+	uv run ruff check --fix .
+	uv run ruff format .
+
+.PHONY: type-check
+type-check:  ## Type-check with ty
+	uv run ty check
+
 .PHONY: release
 release:  ## Cut a release: make release VERSION=0.2.0 [DESC="notes shown above the changelog"]
 	@echo "$(VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "VERSION must be semver, e.g. make release VERSION=0.2.0"; exit 1; }
