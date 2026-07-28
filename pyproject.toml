@@ -1,5 +1,5 @@
 [project]
-name = "lighton"
+name = "lighton-sdk"   # PyPI project; import package stays `lighton`
 version = "1.0.0"
 description = "LightOn Python SDK"
 readme = "README.md"
