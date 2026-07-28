@@ -19,7 +19,7 @@ from lighton.types import LightOnConfiguration
 from lighton.workspace import Workspace
 
 __version__ = version(
-    "lighton"
+    "lighton-sdk"
 )  # single source of truth: pyproject.toml (via installed metadata)
 __all__ = [
     "ApiKey",
