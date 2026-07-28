@@ -66,9 +66,6 @@ class File(_ActiveRecord):
     title: str | None = Field(
         None, description="Document title; defaults to the filename server-side."
     )
-    parser: str | None = Field(
-        None, description="Ingestion pipeline to use; platform default if omitted."
-    )
     # Read-only, populated from responses.
     status: FileStatus | None = Field(
         None, description="Ingestion pipeline status (read-only)."
@@ -154,8 +151,6 @@ class File(_ActiveRecord):
         }
         if self.title:
             data["title"] = self.title
-        if self.parser:
-            data["parser"] = self.parser
         if tags:
             data["tags"] = tags  # httpx encodes a list as repeated form fields
         # Read into memory (not a streamed handle): a 429 retry in _request resends

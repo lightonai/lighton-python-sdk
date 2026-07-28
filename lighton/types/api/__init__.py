@@ -445,17 +445,7 @@ class FileCreateRequestSerializerV3(BaseModel):
     - name: Custom filename (optional, defaults to uploaded filename)
     - title: Custom title for the document (optional)
     - workspace_id: Workspace ID where the document will be stored (required)
-    - parser: Pipeline to use for ingestion processing (optional)
-
-    Changes from V2:
-    - Removed: collection_type (workspace_id is now the source of truth)
-    - Removed: collection (derived automatically from workspace_id)
-    - Simplified: workspace_id is now required and is the single source of truth
-
-    Phase 2 (Deferred):
-    - chunk_size, chunk_overlap
-    - OCR configuration parameters
-    - These may be reorganized into nested configuration objects
+    - parser: Deprecated — ignored, the platform always uses its default pipeline
     """
 
     file: Annotated[AnyUrl, Field(description="The file to upload (binary data)")]
@@ -479,7 +469,8 @@ class FileCreateRequestSerializerV3(BaseModel):
     parser: Annotated[
         str | None,
         Field(
-            description="Ingestion pipeline to use. Only 'v2.2.1' is accepted. If omitted, the platform default is used.",
+            deprecated=True,
+            description="Deprecated — the platform always uses its default ingestion pipeline. This field is accepted but ignored. Will be removed in a future release.",
             max_length=255,
         ),
     ] = None
@@ -842,16 +833,16 @@ class SearchRequest(BaseModel):
     query: Annotated[
         str,
         Field(
-            description="Natural-language search query. Maximum 1500 characters.",
-            max_length=1500,
+            description="Natural-language search query. Maximum 4000 characters.",
+            max_length=4000,
         ),
     ]
     max_results: Annotated[
         int | None,
         Field(
-            description="Maximum number of chunks to return after reranking. Range: 1–50.",
+            description="Maximum number of chunks to return after reranking. Range: 1–100.",
             ge=1,
-            le=50,
+            le=100,
         ),
     ] = 10
     workspace_id: Annotated[
@@ -1075,6 +1066,31 @@ class TagListResponseSerializerV3(BaseModel):
     document_count: Annotated[
         int, Field(description="Number of visible documents with this tag")
     ]
+
+
+class TemplateChildNode(BaseModel):
+    code: Annotated[str, Field(title="Code")]
+    label: Annotated[str, Field(title="Label")]
+    description: Annotated[str | None, Field(title="Description")] = ""
+    path: Annotated[str, Field(title="Path")]
+    inherit_attributes: Annotated[bool | None, Field(title="Inherit Attributes")] = True
+    children: Annotated[
+        list[TemplateChildNode] | None, Field(title="Children", validate_default=True)
+    ] = []
+
+
+class TemplateRootNode(BaseModel):
+    path: Annotated[str, Field(title="Path")]
+    code: Annotated[str, Field(title="Code")]
+    label: Annotated[str, Field(title="Label")]
+    description: Annotated[str | None, Field(title="Description")] = ""
+    children: Annotated[
+        list[TemplateChildNode] | None, Field(title="Children", validate_default=True)
+    ] = []
+    attributes: Annotated[
+        dict[str, list[AttributeDefResponse]] | None,
+        Field(title="Attributes", validate_default=True),
+    ] = {}
 
 
 class UserRoleEnum(StrEnum):
@@ -1528,7 +1544,7 @@ class FileCreateResponseSerializerV3(BaseModel):
         Field(description="Upload session UUID associated with this document"),
     ]
     external_metadata: Annotated[
-        ExternalMetadataResponse, Field(description="External document metadata")
+        ExternalMetadataResponse | None, Field(description="External document metadata")
     ]
     message: Annotated[str, Field(description="Status message about the file upload")]
 
@@ -1839,6 +1855,11 @@ class StandardWorkspaceV3ListResponse(BaseModel):
     scoped_api_keys: list[WorkspaceScopedAPIKey]
 
 
+class TemplateListResponse(BaseModel):
+    content_types: Annotated[list[TemplateRootNode], Field(title="Content Types")]
+    playbooks: Annotated[dict[str, Any] | None, Field(title="Playbooks")] = None
+
+
 class WorkspaceDatasourceBrowseV3Request(BaseModel):
     """
     Pydantic request model for browsing the remote folder hierarchy of a datasource.
@@ -2102,3 +2123,4 @@ class SearchResponse(BaseModel):
 
 
 ContentTypeNodeResponse.model_rebuild()
+TemplateChildNode.model_rebuild()
