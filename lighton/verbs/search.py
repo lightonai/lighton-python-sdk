@@ -34,7 +34,7 @@ class SearchMixin(_VerbClient):
         """POST /api/v3/search, retrieve relevant passages (no generation).
 
         Args:
-            query: Natural-language search query (max 1500 chars).
+            query: Natural-language search query (max 4000 chars).
             workspaces: Restrict to these workspaces (Workspace objects or ids).
                 Excludes files.
             tags: Restrict to documents carrying any of these tags, Tag objects,
@@ -42,7 +42,7 @@ class SearchMixin(_VerbClient):
                 must exist. Excludes files.
             files: Restrict to these files (File objects or ids). Excludes
                 workspaces and tags.
-            max_results: Chunks to return after reranking (1–50; server default 10).
+            max_results: Chunks to return after reranking (1–100; server default 10).
             mode: SearchMode.text (hybrid keyword+vector) or .vision (page-image).
             relevance_scoring: RelevanceScoring, .scoring_and_filtering (default),
                 .scoring_only, or .none.
