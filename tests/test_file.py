@@ -37,6 +37,27 @@ def test_create_uploads_multipart_and_absorbs_status(tmp_path):
     assert b"report.pdf" in sent["body"] and b"%PDF-1.4 fake" in sent["body"]
 
 
+def test_save_patches_form_encoded_not_json():
+    # The /files endpoints reject application/json with 415; title must ride as a form field.
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 7, "title": "old title"})
+        sent["ct"] = request.headers["content-type"]
+        sent["body"] = request.content
+        return httpx.Response(200, json={"id": 7, "title": "new title"})
+
+    f = File.get(_make_client(handler), 7)
+    assert f.title == "old title"
+    f.title = "new title"
+    f.save()
+
+    assert sent["ct"] == "application/x-www-form-urlencoded"
+    assert sent["body"] == b"title=new+title"
+    assert f.title == "new title"
+
+
 def test_create_requires_path_and_workspace(tmp_path):
     client = _make_client(lambda r: httpx.Response(201, json={"id": 1}))
     with pytest.raises(ValueError):
@@ -176,7 +197,7 @@ def _files_list_client(results):
     return _make_client(handler), handler
 
 
-def test_get_by_name_returns_unique_match():
+def test_get_by_name_matches_title_not_stored_filename():
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -185,52 +206,69 @@ def test_get_by_name_returns_unique_match():
             200,
             json={
                 "results": [
-                    {"id": 1, "filename": "report.pdf"},
+                    # The server uniquified the filename; only the title still matches.
+                    {
+                        "id": 1,
+                        "filename": "report_20260728_c9be.pdf",
+                        "title": "report",
+                    },
                     {
                         "id": 2,
                         "filename": "annual_report.pdf",
+                        "title": "annual_report",
                     },  # partial match, dropped
                 ],
                 "next": None,
             },
         )
 
-    f = File.get_by_name(_make_client(handler), "report.pdf", workspace=42)
-    assert f.id == 1
-    assert seen["query"]["filename"] == "report.pdf"
+    found = File.get_by_name(_make_client(handler), "report.pdf", workspace=42)
+    assert [f.id for f in found] == [1]
+    assert seen["query"]["title"] == "report"  # queried by stem, not "report.pdf"
     assert seen["query"]["workspace_id"] == "42"
+
+
+def test_get_by_name_accepts_a_title_with_an_extension_in_it():
+    # A custom title can itself carry an extension; match it verbatim too.
+    client, _ = _files_list_client([{"id": 3, "filename": "x.pdf", "title": "a.pdf"}])
+    assert [f.id for f in File.get_by_name(client, "a.pdf", workspace=1)] == [3]
 
 
 def test_get_by_name_accepts_workspace_object():
     def handler(request: httpx.Request) -> httpx.Response:
         assert dict(request.url.params)["workspace_id"] == "7"
         return httpx.Response(
-            200, json={"results": [{"id": 1, "filename": "a.pdf"}], "next": None}
+            200,
+            json={
+                "results": [{"id": 1, "filename": "a.pdf", "title": "a"}],
+                "next": None,
+            },
         )
 
     ws = Workspace(name="w")
     ws.id = 7
-    assert File.get_by_name(_make_client(handler), "a.pdf", workspace=ws).id == 1
+    found = File.get_by_name(_make_client(handler), "a.pdf", workspace=ws)
+    assert [f.id for f in found] == [1]
 
 
-def test_get_by_name_requires_extension():
-    client = _make_client(
-        lambda r: httpx.Response(200, json={"results": [], "next": None})
-    )
-    with pytest.raises(ValueError, match="must include an extension"):
-        File.get_by_name(client, "report", workspace=1)
-
-
-def test_get_by_name_raises_on_zero_or_many():
+def test_get_by_name_returns_every_match_and_empty_on_none():
     none_client, _ = _files_list_client([])
-    with pytest.raises(ValueError, match="found 0"):
-        File.get_by_name(none_client, "x.pdf", workspace=1)
+    assert File.get_by_name(none_client, "x.pdf", workspace=1) == []
 
+    # Titles aren't unique — the same document uploaded twice shares one.
     many_client, _ = _files_list_client(
-        [{"id": 1, "filename": "x.pdf"}, {"id": 2, "filename": "x.pdf"}]
+        [
+            {"id": 1, "filename": "x_1.pdf", "title": "x"},
+            {"id": 2, "filename": "x_2.pdf", "title": "x"},
+        ]
     )
-    with pytest.raises(ValueError, match="found 2"):
-        File.get_by_name(many_client, "x.pdf", workspace=1)
+    assert [f.id for f in File.get_by_name(many_client, "x.pdf", workspace=1)] == [1, 2]
+
+
+def test_get_by_name_requires_a_persisted_workspace():
+    client, _ = _files_list_client([])
+    with pytest.raises(ValueError, match="must be created/retrieved"):
+        File.get_by_name(client, "x.pdf", workspace=Workspace(name="unsaved"))
 
 
 def test_classify_and_attributes_post_actions(tmp_path):

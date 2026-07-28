@@ -4,6 +4,10 @@ SCHEMA_URL = https://api.lighton.ai/docs/schema/
 test:  ## Run the test suite
 	uv run pytest
 
+.PHONY: e2e
+e2e:  ## Smoke-test the SDK against the live API (needs LIGHTON_API_KEY): make e2e ARGS="--only search"
+	uv run tests/e2e/cli.py $(ARGS)
+
 .PHONY: install-hooks
 install-hooks:  ## Install the pre-commit git hooks
 	uv run pre-commit install

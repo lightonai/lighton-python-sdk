@@ -91,41 +91,43 @@ class File(_ActiveRecord):
 
     @classmethod
     def get_by_name(
-        cls, client: LightOn, filename: str, *, workspace: Workspace | int
-    ) -> File:
-        """Fetch the one file with this exact filename in a workspace.
+        cls, client: LightOn, name: str, *, workspace: Workspace | int
+    ) -> _list[File]:
+        """Fetch every file with this user-facing name in a workspace.
 
-        The API's `filename` filter is a case-insensitive *partial* match, so the
-        candidates it returns are narrowed to an exact `filename` match here.
+        Matches `title`, not `filename`: the server uniquifies filenames on upload
+        ("report.pdf" is stored as something like "report_20260728_c9be.pdf"), so the
+        name you uploaded never matches the stored one. A title defaults to the
+        uploaded filename without its extension, so "report.pdf" and "report" both
+        find that upload.
+
+        Titles are not unique the way stored filenames are, uploading the same
+        document twice gives both copies the same title, so this returns every match
+        rather than picking one. Check the length if you need exactly one.
+
+        The API's `title` filter is a case-insensitive *partial* match, so the
+        candidates it returns are narrowed to an exact title match here.
 
         Args:
-            client: The client to query with and bind to the result.
-            filename: Full filename including extension (e.g. "report.pdf").
+            client: The client to query with and bind to the results.
+            name: The file's title, with or without an extension (e.g. "report.pdf").
             workspace: The workspace to search in (Workspace object or id).
 
         Returns:
-            The matching File, bound to `client`.
+            Every File with that title, each bound to `client`; empty if none match.
 
         Raises:
-            ValueError: If `filename` has no extension, the workspace has no id, or
-                the match isn't unique (zero or several files with that exact name).
+            ValueError: If the workspace has not been created/retrieved (has no id).
         """
-        if not Path(filename).suffix:
-            raise ValueError(f"filename must include an extension, got {filename!r}")
         workspace_id = workspace if isinstance(workspace, int) else workspace.id
         if workspace_id is None:
             raise ValueError("workspace must be created/retrieved (has no id)")
-        matches = [
+        stem = Path(name).stem  # a title defaults to the filename minus its extension
+        return [
             f
-            for f in cls.list(client, workspace_id=workspace_id, filename=filename)
-            if f.filename == filename
+            for f in cls.list(client, workspace_id=workspace_id, title=stem)
+            if f.title in (name, stem)
         ]
-        if len(matches) != 1:
-            raise ValueError(
-                f"expected exactly one file named {filename!r} in workspace "
-                f"{workspace_id}, found {len(matches)}"
-            )
-        return matches[0]
 
     # --- instance lifecycle ------------------------------------------------
     def create(self, client: LightOn, *, tags: _list[int] | None = None) -> File:
@@ -170,8 +172,10 @@ class File(_ActiveRecord):
         Returns:
             `self`, refreshed with the server's response.
         """
+        # Form-encoded, not JSON: the /files endpoints accept only multipart and
+        # x-www-form-urlencoded, a JSON body is rejected with 415.
         return self._absorb(
-            self._api("PATCH", f"{_BASE}/{self.id}", json={"title": self.title})
+            self._api("PATCH", f"{_BASE}/{self.id}", data={"title": self.title})
         )
 
     def tag(self, tags: _list[Tag | int | str]) -> File:

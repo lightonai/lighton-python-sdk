@@ -17,6 +17,7 @@ dev = [
     "pre-commit",
     "datamodel-code-generator",
     "pytest>=9.1.1",
+    "typer>=0.27.0",
 ]
 
 [tool.uv]

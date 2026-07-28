@@ -31,8 +31,9 @@ lighton/
     client/configuration.py   # LightOnConfiguration
     batch.py                  # BatchIngest / BatchProgress / FailedIngest (batch results)
     api/__init__.py           # GENERATED pydantic models (do not hand-edit)
-tests/               # pytest
-Makefile             # make test, make gen-types
+tests/               # pytest (offline, MockTransport)
+  e2e/cli.py         # live-API smoke CLI (typer), NOT collected by pytest: make e2e
+Makefile             # make test, make e2e, make gen-types
 ```
 
 Rule: `types/` holds pure pydantic data schemas. Anything with logic/behavior
@@ -132,11 +133,16 @@ response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
   `wait()` block. `wait_all()` (module-level, `ThreadPoolExecutor`) waits on many at once.
 - `tags` is a `create()` **argument**, not a model field, the response returns tags as
   objects (not the `list[int]` the request takes), which would clash on `_absorb`.
-- **`get_by_name(client, filename, *, workspace)`** fetches the one file with an exact
-  filename in a workspace (`workspace` = object or id). The API's `filename` filter is a
-  case-insensitive *partial* match, so results are narrowed to an exact `filename` match
-  client-side, then required to be unique, raises `ValueError` on no extension, missing
-  workspace id, or a non-unique (0 or >1) match.
+- **`get_by_name(client, name, *, workspace)`** returns `list[File]`, every file with
+  that user-facing name in a workspace (`workspace` = object or id). It matches
+  **`title`, not `filename`**: the server uniquifies filenames on upload (`report.pdf`
+  is stored as `report_20260728_c9be.pdf`), so the uploaded name never matches the
+  stored one, while `title` defaults to the filename minus its extension. The API's
+  `title` filter is a case-insensitive *partial* match, so it queries the stem and
+  narrows to an exact title match client-side. A list, not one file: titles aren't
+  unique the way stored filenames are (the same document uploaded twice shares one),
+  so callers that need exactly one check the length. Empty on no match, the only
+  `ValueError` is a workspace with no id.
 - **`tag()`/`untag()`** assign/remove tags post-upload; both accept `Tag` objects, ids,
   **or names** via `tag.resolve_ids(client, ...)`, names are resolved through a single
   `Tag.list()` and an unknown name raises `ValueError` (fail loud, not silent no-tag).
@@ -236,7 +242,10 @@ generalize speculatively for a shape only one subclass needs.
 
 - **Absolute imports only** (`from lighton.x import y`), no relative. Caveat: keep any runtime `LightOn` import inside a function or `TYPE_CHECKING` to avoid cycles (`__init__` imports `_client`).
 - **No inline imports**, all imports at module top. (Test self-checks went to `tests/` precisely so their imports could be top-level without circular issues.)
-- **Tests**: pytest, fixtures + `pytest.raises`. `pythonpath = ["."]` so tests import the source tree directly (independent of the editable-install finder, which goes stale when new modules are added). Mock HTTP via `httpx.MockTransport`.
+- **Tests**: pytest, fixtures + `pytest.raises`. `pythonpath = ["."]` so tests import the source tree directly (independent of the editable-install finder, which goes stale when new modules are added). Mock HTTP via `httpx.MockTransport`. The suite never touches the network; the live-API
+check is `tests/e2e/cli.py` (`make e2e`), a step-per-feature typer CLI that creates a
+throwaway workspace, runs every SDK verb against `tests/e2e/documents/`, and deletes what
+it made. Add a step there when you add a feature.
 - **Tooling**: ruff (lint + format), ty (type check), pytest, all enforced via pre-commit. `ty` has no autofix; it blocks on errors.
 - **uv.lock**: re-stage it after any dependency change before committing, or the ty pre-commit hook (which runs through `uv` and re-resolves) will report a lockfile modification and fail the commit.
 - New deps: prefer stdlib → installed dep → a few lines, before adding anything. Mark deliberate simplifications with `ponytail:` comments.

@@ -267,9 +267,12 @@ with LightOn() as client:
 
     doc = File.get(client, f.id)
 
-    # Or fetch by exact filename within a workspace (must include the extension;
-    # raises unless exactly one match). workspace takes a Workspace or an id.
-    doc = File.get_by_name(client, "report.pdf", workspace=42)
+    # Or fetch by name within a workspace — matches the title, so pass the name you
+    # uploaded (the server uniquifies the stored filename). The extension is optional.
+    # Returns every match (titles aren't unique), empty if there are none.
+    # workspace takes a Workspace or an id.
+    docs = File.get_by_name(client, "report.pdf", workspace=42)
+    doc = docs[0]
     doc.title = "Q4 Report"
     doc.save()
 
@@ -436,7 +439,7 @@ hood and a name that doesn't exist raises `ValueError`:
 ```python
 from lighton import File
 
-doc = File.get_by_name(client, "nda-2026.pdf", workspace=42)
+doc = File.get_by_name(client, "nda-2026.pdf", workspace=42)[0]
 
 doc.tag([contracts])                 # Tag object
 doc.tag([12, 13])                    # bare ids
@@ -477,7 +480,7 @@ object or a plain path string:
 ```python
 from lighton import File
 
-doc = File.get_by_name(client, "nda-2026.pdf", workspace=42)
+doc = File.get_by_name(client, "nda-2026.pdf", workspace=42)[0]
 
 doc.classify("legal:contract:nda")
 doc.set_attribute("legal:contract:nda", "jurisdiction", "FR")
