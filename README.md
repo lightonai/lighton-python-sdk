@@ -27,6 +27,7 @@ This SDK wraps the LightOn API. Create an account and get an API key on [console
 - [Tags](#tags)
 - [Content types](#content-types)
 - [API keys](#api-keys)
+- [Client configuration](#client-configuration)
 - [Agent Frameworks](#agent-frameworks)
 
 ## Quick start
@@ -517,6 +518,54 @@ with LightOn() as client:
     key.name = "ci-pipeline-v2"
     key.save()
     key.delete()
+```
+
+## Client configuration
+
+`LightOn()` with no arguments reads `LIGHTON_API_KEY` from the environment and talks to
+`https://api.lighton.ai`. To point it somewhere else — a self-hosted deployment, a
+staging environment, a local instance — pass a `base_url`:
+
+```python
+from lighton import LightOn, LightOnConfiguration
+
+with LightOn(
+    api_key="sk-...",  # or omit and let it read LIGHTON_API_KEY
+    config=LightOnConfiguration(base_url="https://lighton.internal.acme.com"),
+) as client:
+    print(client.search("onboarding policy").results)
+```
+
+`base_url` is the host only: the SDK appends the `/api/v3/...` paths itself, and a
+trailing slash is stripped, so `https://host/` and `https://host` behave the same.
+
+Everything on `LightOnConfiguration` is optional and independent, override only what
+you need:
+
+| field | default | what it controls |
+| --- | --- | --- |
+| `base_url` | `https://api.lighton.ai` | API root; point at another deployment |
+| `timeout` | 5 s connect, 120 s read | `httpx.Timeout`; raise the read timeout for slow parses |
+| `retries` | `3` | connection-level retries with backoff (httpx transport), **not** HTTP errors |
+| `max_requests_per_minute` | `1000` | paces every request under the API cap; `None` disables pacing |
+| `rate_limit_retries` | `3` | retries on HTTP 429, waiting `Retry-After` when present; `0` disables |
+| `transport` | `None` | a custom `httpx.BaseTransport`, for a proxy, or `MockTransport` in tests |
+
+The API key stays a direct `LightOn()` argument rather than a config field, so a
+config object can be shared or logged without carrying a secret.
+
+A local instance over plain HTTP, with a longer read timeout and no pacing:
+
+```python
+import httpx
+
+config = LightOnConfiguration(
+    base_url="http://localhost:8000",
+    timeout=httpx.Timeout(600.0, connect=5.0),
+    max_requests_per_minute=None,
+)
+with LightOn(config=config) as client:
+    ...
 ```
 
 ## Agent Frameworks
