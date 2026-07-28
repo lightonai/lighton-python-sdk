@@ -34,7 +34,7 @@ This SDK wraps the LightOn API. Create an account and get an API key on [console
 
 Install:
 ```bash
-uv add lighton
+uv add lighton-sdk
 ```
 
 Set your API key in your environment:
