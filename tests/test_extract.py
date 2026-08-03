@@ -8,6 +8,7 @@ from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel
 
 from lighton import ExecMode, LightOn, LightOnConfiguration
+from lighton.exceptions import LightOnError
 from lighton.utils import validate_response_format_json
 
 
@@ -125,3 +126,51 @@ def test_extract_malformed_dict_schema_raises():
     # "type" must be a string/array, not an int — invalid per the meta-schema
     with pytest.raises(SchemaError):
         client.extract({"type": 123}, url="https://x/i.pdf")
+
+
+_DONE = {**_OK, "completed_at": "2026-01-01T00:00:01Z"}
+
+
+def test_extract_async_wait_returns_finished_job():
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.method == "POST"  # already terminal, no poll needed
+        return httpx.Response(200, json=_DONE)
+
+    job = make_client(handler).extract(
+        {"type": "object"}, url="https://x/i.pdf", mode=ExecMode.ASYNC, wait=True
+    )
+    assert job.done and job.succeeded
+    assert job.result is not None and job.result.data == [{"total": 42}]
+
+
+def test_job_wait_polls_until_done():
+    seq = iter([_OK, _OK, _DONE])  # not terminal until completed_at is set
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST":
+            return httpx.Response(202, json={"id": "e1", "status": "pending"})
+        return httpx.Response(200, json=next(seq))
+
+    job = make_client(handler).extract(
+        {"type": "object"}, url="https://x/i.pdf", mode=ExecMode.ASYNC
+    )
+    assert job.wait(timeout=5, poll=0) is job and job.done  # poll=0 → no real sleep
+
+
+def test_job_wait_raises_on_terminal_failure():
+    failed = {"id": "e1", "status": "failed", "completed_at": "2026-01-01T00:00:01Z"}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200 if req.method == "GET" else 202, json=failed)
+
+    with pytest.raises(LightOnError, match="failed"):
+        make_client(handler).extract(
+            {"type": "object"}, url="https://x/i.pdf", mode=ExecMode.ASYNC, wait=True
+        )
+
+
+def test_extract_wait_requires_async_mode():
+    client = make_client(lambda req: httpx.Response(200, json=_OK))
+    with pytest.raises(ValueError, match="wait=True"):
+        # wait without ASYNC is also a static error, hence the ignore
+        client.extract({"type": "object"}, url="https://x/i.pdf", wait=True)  # ty: ignore[no-matching-overload]

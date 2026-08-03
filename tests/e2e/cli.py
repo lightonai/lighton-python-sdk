@@ -26,7 +26,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import FunctionType
-from typing import TypeVar
 
 import typer
 from pydantic import BaseModel, Field
@@ -37,10 +36,8 @@ from lighton import (
     Attribute,
     ContentType,
     ExecMode,
-    ExtractJob,
     File,
     LightOn,
-    ParseJob,
     RelevanceScoring,
     Role,
     SearchMode,
@@ -52,7 +49,6 @@ from lighton import (
 DOCS_DIR = Path(__file__).parent / "documents"
 JOB_TIMEOUT = 300.0
 PREREQS = ("workspace", "upload")  # implied by --only: the rest build on them
-_JobT = TypeVar("_JobT", ParseJob, ExtractJob)
 
 
 class DocumentSummary(BaseModel):
@@ -117,19 +113,6 @@ def _topic(c: Ctx) -> str:
         c.topic = " ".join(longest.split()[:12]) or c.docs[0].stem
         _say(f"derived query from {c.docs[0].name}: {c.topic!r}")
     return c.topic
-
-
-def _poll(job: _JobT, timeout: float = JOB_TIMEOUT) -> _JobT:
-    """Poll an async parse/extract job until it is terminal."""
-    deadline = time.monotonic() + timeout
-    while not job.done:
-        if time.monotonic() > deadline:
-            raise TimeoutError(f"job {job.id} still {job.status} after {timeout}s")
-        time.sleep(2.0)
-        job.poll()
-    if not job.succeeded:
-        raise RuntimeError(f"job {job.id} finished unsuccessfully: {job.status}")
-    return job
 
 
 # --- steps ------------------------------------------------------------------
@@ -296,7 +279,7 @@ def parse(c: Ctx) -> None:
     assert pages, "sync parse returned no pages"
     _say(f"sync: {len(pages)} page(s), page 1 is {len(pages[0].markdown)} chars")
 
-    job = _poll(c.client.parse(path=doc, mode=ExecMode.ASYNC))
+    job = c.client.parse(path=doc, mode=ExecMode.ASYNC, wait=True, timeout=JOB_TIMEOUT)
     assert job.result and job.result.pages, "async parse returned no pages"
     _say(f"async: job {job.id} completed in {job.processing_time_ms}ms")
 
@@ -309,7 +292,9 @@ def extract(c: Ctx) -> None:
     assert r.result and r.result.data, "sync extract returned no data"
     _say(f"sync: {r.result.data}")
 
-    job = _poll(c.client.extract(DocumentSummary, path=doc, mode=ExecMode.ASYNC))
+    job = c.client.extract(
+        DocumentSummary, path=doc, mode=ExecMode.ASYNC, wait=True, timeout=JOB_TIMEOUT
+    )
     assert job.result and job.result.data, "async extract returned no data"
     _say(f"async: job {job.id} completed in {job.processing_time_ms}ms")
 

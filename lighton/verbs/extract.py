@@ -52,6 +52,8 @@ class ExtractMixin(_VerbClient):
         url: str | None = ...,
         options: dict[str, Any] | None = ...,
         mode: Literal[ExecMode.ASYNC],
+        wait: bool = ...,
+        timeout: float = ...,
     ) -> ExtractJob: ...
     def extract(
         self,
@@ -61,6 +63,8 @@ class ExtractMixin(_VerbClient):
         url: str | None = None,
         options: dict[str, Any] | None = None,
         mode: ExecMode = ExecMode.SYNC,
+        wait: bool = False,
+        timeout: float = 300.0,
     ) -> ExtractJobResponse | ExtractJob:
         """POST /api/v3/extract, extract structured data from a document.
 
@@ -76,13 +80,24 @@ class ExtractMixin(_VerbClient):
             mode: ExecMode.SYNC (default) runs inline and returns the extracted
                 data. ExecMode.ASYNC queues the job and returns an ``ExtractJob``
                 handle, call ``.poll()`` until ``.succeeded``.
+            wait: Async only. Block until the job is terminal, so the returned
+                ``ExtractJob`` already carries its ``result``.
+            timeout: Seconds to wait when wait=True before raising TimeoutError.
 
         Returns:
-            ``ExtractJobResponse`` (with data) when sync; a pollable ``ExtractJob``
-            when async.
+            ``ExtractJobResponse`` (with data) when sync; an ``ExtractJob`` when
+            async, pollable (wait=False) or already finished (wait=True).
+
+        Raises:
+            ValueError: If not exactly one of path/url is given, or wait=True
+                without ExecMode.ASYNC (sync already blocks).
+            TimeoutError: If wait=True and `timeout` elapses first.
+            LightOnError: If wait=True and the job ends in failure.
         """
         if (path is None) == (url is None):
             raise ValueError("extract() requires exactly one of 'path' or 'url'")
+        if wait and mode != ExecMode.ASYNC:
+            raise ValueError("wait=True only applies to mode=ExecMode.ASYNC")
         if mode == ExecMode.ASYNC:
             options = {**(options or {}), "async": True}
         json_schema = _as_json_schema(schema)
@@ -105,5 +120,6 @@ class ExtractMixin(_VerbClient):
                 body["options"] = options
             resp = self._request("POST", "/api/v3/extract", json=body)
         if mode == ExecMode.ASYNC:
-            return ExtractJob._bind(self, "/api/v3/extract", resp)
+            job = ExtractJob._bind(self, "/api/v3/extract", resp)
+            return job.wait(timeout) if wait else job
         return ExtractJobResponse.model_validate(resp)
