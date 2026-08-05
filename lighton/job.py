@@ -9,11 +9,13 @@ polling plumbing is shared on `_Job`.
 
 from __future__ import annotations
 
+import time
 from typing import Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PrivateAttr
 
 from lighton.enums import JobStatus
+from lighton.exceptions import LightOnError
 from lighton.types.api import (
     ExtractDocument,
     ExtractResult,
@@ -81,6 +83,37 @@ class _Job(BaseModel):
         for field in type(self).model_fields:
             if field in data:  # only overwrite what the response returned
                 setattr(self, field, getattr(fresh, field))
+        return self
+
+    def wait(self, timeout: float = 300.0, poll: float = 2.0) -> Self:
+        """Block (polling) until the job is terminal, mirrors `File.wait`.
+
+        ponytail: dumb poll loop, the API offers no webhook.
+
+        Args:
+            timeout: Max seconds to wait before raising TimeoutError.
+            poll: Seconds to sleep between status checks.
+
+        Returns:
+            `self`, once the job has completed successfully.
+
+        Raises:
+            TimeoutError: If `timeout` elapses before the job is terminal.
+            LightOnError: If the job ends in a terminal-failure state.
+        """
+        deadline = time.monotonic() + timeout
+        while not self.done:
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"job {self.id} still {self.status} after {timeout}s"
+                )
+            time.sleep(poll)
+            self.poll()
+        if not self.succeeded:
+            # `error` only exists on ParseJob; extract reports failure via status.
+            raise LightOnError(
+                f"job {self.id} failed: {getattr(self, 'error', None) or self.status}"
+            )
         return self
 
     @property

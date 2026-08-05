@@ -321,6 +321,25 @@ for row in job.result.data:
 reads naturally; raising once `job.done` (terminal but not successful) means a
 stuck or failed job surfaces instead of looping forever.
 
+If you don't need live progress, don't write the loop: pass `wait=True` to block
+until the job is terminal (same `wait=` / `timeout=` pair as `ingest`), or call
+`job.wait()` yourself. Both return the finished job, raise `TimeoutError` past
+`timeout` (default 300s), and raise `LightOnError` if the job ends in failure, so
+the `result` is there when the call returns.
+
+```python
+# async endpoint (no sync timeout to hit), but blocking, no polling code
+job = client.extract(schema=Letter, path="big-scan.pdf", mode=ExecMode.ASYNC, wait=True)
+for row in job.result.data:
+    print(row)
+
+# equivalent, and how to tune the poll interval
+job = client.parse(path="big.pdf", mode=ExecMode.ASYNC).wait(timeout=1800, poll=5)
+```
+
+`wait=True` only makes sense with `ExecMode.ASYNC` (sync already blocks); passing
+it without is a `ValueError`.
+
 `parse` is the same shape, on failure a `ParseJob` carries an `error` block you
 can raise with directly:
 

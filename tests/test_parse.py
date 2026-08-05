@@ -98,3 +98,21 @@ def test_parse_async_returns_job_and_polls_in_place():
     assert same is job
     assert job.succeeded and job.done
     assert job.result is not None and job.result.pages == []
+
+
+def test_parse_async_wait_returns_finished_job():
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.method == "POST"  # already terminal, no poll needed
+        return httpx.Response(200, json=_parse_body("parse_Kg", 8))
+
+    job = make_client(handler).parse(
+        url="https://example.com/d.pdf", mode=ExecMode.ASYNC, wait=True
+    )
+    assert job.done and job.succeeded and job.result is not None
+
+
+def test_parse_wait_requires_async_mode():
+    client = make_client(lambda req: httpx.Response(200, json=_parse_body("p1", 8)))
+    with pytest.raises(ValueError, match="wait=True"):
+        # wait without ASYNC is also a static error, hence the ignore
+        client.parse(url="https://example.com/d.pdf", wait=True)  # ty: ignore[no-matching-overload]
