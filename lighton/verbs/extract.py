@@ -13,20 +13,23 @@ from lighton.job import ExtractJob
 from lighton.types.api import ExtractJobResponse
 from lighton.utils import (
     convert_pydantic_to_response_format_json,
+    normalize_response_format_json,
     validate_response_format_json,
 )
 from lighton.verbs._base import _VerbClient
 
 
 def _as_json_schema(schema: type[BaseModel] | dict[str, Any]) -> dict[str, Any]:
-    """A pydantic model class → a vLLM guided-generation schema; a dict is validated.
+    """Either input → the self-contained vLLM guided-generation schema.
 
-    A dict is validated against the JSON-Schema meta-schema (raises on malformed)
-    and otherwise returned untouched. A pydantic model is converted via
-    `convert_pydantic_to_response_format_json`.
+    A dict is validated against the JSON-Schema meta-schema (raises on malformed),
+    then normalized; a pydantic model class is converted, which normalizes too.
+    Both go through `normalize_response_format_json` because the endpoint rejects
+    `$ref`, and a dict hand-built from `model_json_schema()` carries them just as
+    a model class does.
     """
     if isinstance(schema, dict):
-        return validate_response_format_json(schema)
+        return normalize_response_format_json(validate_response_format_json(schema))
     if isinstance(schema, type) and issubclass(schema, BaseModel):
         return convert_pydantic_to_response_format_json(schema)
     raise TypeError("schema must be a pydantic BaseModel subclass or a dict")

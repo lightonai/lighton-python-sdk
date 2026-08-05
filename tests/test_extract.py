@@ -1,4 +1,4 @@
-"""extract verb: pydantic → vLLM schema, raw-dict passthrough, url vs path upload."""
+"""extract verb: pydantic/dict → vLLM schema, url vs path upload."""
 
 import json
 
@@ -9,7 +9,12 @@ from pydantic import BaseModel
 
 from lighton import ExecMode, LightOn, LightOnConfiguration
 from lighton.exceptions import LightOnError
-from lighton.utils import validate_response_format_json
+from lighton.utils import (
+    convert_pydantic_to_response_format_json,
+    validate_response_format_json,
+)
+
+_DRAFT = "https://json-schema.org/draft/2020-12/schema"
 
 
 def make_client(handler) -> LightOn:
@@ -68,8 +73,42 @@ def test_extract_url_sends_json():
 
     make_client(handler).extract(raw, url="https://x/i.pdf", options={"async": False})
     assert seen["body"]["document"] == "https://x/i.pdf"
-    assert seen["body"]["schema"] == raw  # dict passed through untouched
+    assert seen["body"]["schema"] == {"$schema": _DRAFT, **raw}
     assert seen["body"]["options"] == {"async": False}
+
+
+def test_extract_dict_schema_refs_are_inlined():
+    """A dict built from model_json_schema() carries $defs/$ref; the API rejects them."""
+
+    class Address(BaseModel):
+        city: str
+
+    class Company(BaseModel):
+        name: str
+        addr: Address
+        sites: list[Address] = []
+
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json=_OK)
+
+    make_client(handler).extract(Company.model_json_schema(), url="https://x/i.pdf")
+    schema = seen["body"]["schema"]
+    assert "$defs" not in schema and "$ref" not in json.dumps(schema)
+    city = {"city": {"title": "City", "type": "string"}}
+    assert schema["properties"]["addr"]["properties"] == city
+    assert schema["properties"]["sites"]["items"]["properties"] == city
+    # same result as handing the model class over directly
+    assert schema == convert_pydantic_to_response_format_json(Company)
+
+
+def test_extract_dict_schema_with_dangling_ref_raises():
+    client = make_client(lambda req: httpx.Response(200, json=_OK))
+    raw = {"type": "object", "properties": {"addr": {"$ref": "#/$defs/Nope"}}}
+    with pytest.raises(SchemaError, match="unresolved"):
+        client.extract(raw, url="https://x/i.pdf")
 
 
 def test_extract_path_sends_multipart(tmp_path):
@@ -87,7 +126,7 @@ def test_extract_path_sends_multipart(tmp_path):
     assert seen["ctype"].startswith("multipart/form-data")
     # file part + schema/options as JSON-encoded form fields
     assert b'name="file"' in seen["body"] and b"doc.png" in seen["body"]
-    assert json.dumps(raw).encode() in seen["body"]
+    assert json.dumps({"$schema": _DRAFT, **raw}).encode() in seen["body"]
     assert b'{"async": false}' in seen["body"]
 
 

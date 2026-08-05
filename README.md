@@ -403,7 +403,10 @@ with LightOn() as client:
 ```
 
 Or pass the schema dict directly, it's validated against the JSON-Schema
-meta-schema (raises `jsonschema.SchemaError` if malformed) and sent as-is:
+meta-schema (raises `jsonschema.SchemaError` if malformed), then normalized the
+same way a model is — the endpoint rejects `$ref`, so `$defs`/`$ref` are inlined
+whether the schema came from a model class or from your own
+`Model.model_json_schema()` call:
 
 ```python
 with LightOn() as client:
