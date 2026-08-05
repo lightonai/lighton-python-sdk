@@ -13,6 +13,8 @@ documents, then query them with grounded ask and search actions, and process doc
 parse and extract for specific, standalone actions.
 This SDK wraps the LightOn API. Create an account and get an API key on [console.lighton.ai](https://console.lighton.ai) 🚀
 
+![State-of-the-art RAG in 3 lines of code](https://raw.githubusercontent.com/lightonai/lighton-python-sdk/main/docs/images/lighton_sdk_banner.png)
+
 **Note from the human maintainers:**
 > This code-base is implemented with AI assistance to allow our team to keep up with the required development celerity, however be assured that all design-patterns, architectural decisions, code-reviews and QA cycles are fully human-backed to ensure that this SDK meet our standards of quality and that we maintainers keep full knowledge of its inner workings to better serve the developer community <3
 
