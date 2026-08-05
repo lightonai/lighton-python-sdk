@@ -445,7 +445,7 @@ class FileCreateRequestSerializerV3(BaseModel):
     - name: Custom filename (optional, defaults to uploaded filename)
     - title: Custom title for the document (optional)
     - workspace_id: Workspace ID where the document will be stored (required)
-    - parser: Deprecated — ignored, the platform always uses its default pipeline
+    - parser: Deprecated: ignored, the platform always uses its default pipeline
     """
 
     file: Annotated[AnyUrl, Field(description="The file to upload (binary data)")]

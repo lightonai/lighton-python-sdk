@@ -78,6 +78,13 @@ class DocumentOutline(BaseModel):
     sections: list[Section] = Field(description="Every top-level section heading.")
 
 
+class GroundedAnswer(BaseModel):
+    """`ask(schema=...)` structured output: the LLM answer is constrained to this."""
+
+    answer: str = Field(description="The answer, in one or two sentences.")
+    confident: bool = Field(description="True if the sources fully support it.")
+
+
 @dataclass
 class Ctx:
     client: LightOn
@@ -278,7 +285,7 @@ def search(c: Ctx) -> None:
 
 @step
 def ask(c: Ctx) -> None:
-    """grounded answer over the workspace."""
+    """grounded answer over the workspace → structured answer via schema=."""
     query = c.ask_query or f"What does the document say about {_topic(c)}?"
     r = c.client.ask(
         query,
@@ -288,6 +295,11 @@ def ask(c: Ctx) -> None:
     )
     assert r.answer, f"ask({query!r}) returned an empty answer"
     _say(f"answer ({len(r.results)} source chunk(s)): {r.answer[:160]}")
+
+    # structured output: the answer comes back as JSON text matching the schema.
+    s = c.client.ask(query, workspaces=[c.workspace()], schema=GroundedAnswer)
+    parsed = GroundedAnswer.model_validate_json(s.answer)  # raises if off-schema
+    _say(f"structured: confident={parsed.confident} {parsed.answer[:120]}")
 
 
 @step
@@ -305,7 +317,7 @@ def parse(c: Ctx) -> None:
 
 @step
 def extract(c: Ctx) -> None:
-    """sync → async job (flat schema) → nested schema, as a model and as a raw dict."""
+    """sync → async job → nested schema (model + raw dict) → an ingested file=."""
     doc = c.docs[0]
     r = c.client.extract(DocumentSummary, path=doc)
     assert r.result and r.result.data, "sync extract returned no data"
@@ -323,12 +335,17 @@ def extract(c: Ctx) -> None:
     _say(f"nested (model class): {nested.result.data}")
 
     raw = DocumentOutline.model_json_schema()  # carries $defs/$ref verbatim
-    assert "$defs" in raw, "pydantic stopped emitting $defs — this case is now moot"
+    assert "$defs" in raw, "pydantic stopped emitting $defs, this case is now moot"
     as_dict = c.client.extract(raw, path=doc)
     assert as_dict.result and as_dict.result.data, (
         "nested dict extract returned no data"
     )
     _say(f"nested (raw dict): {as_dict.result.data}")
+
+    # file=: extract from the already-ingested file, no re-upload
+    by_id = c.client.extract(DocumentSummary, file=c.uploaded())
+    assert by_id.result and by_id.result.data, "extract by file_id returned no data"
+    _say(f"by file_id {c.uploaded().id}: {by_id.result.data}")
 
 
 @step

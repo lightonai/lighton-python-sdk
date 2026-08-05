@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
+
+from pydantic import BaseModel
 
 from lighton.enums import RelevanceScoring
 from lighton.tag import resolve_ids
 from lighton.types.api import AskResponse
-from lighton.utils import _compact, _ids
+from lighton.utils import _compact, _ids, as_json_schema
 from lighton.verbs._base import _VerbClient
 
 if TYPE_CHECKING:
@@ -30,6 +32,7 @@ class AskMixin(_VerbClient):
         max_results: int | None = None,
         relevance_scoring: RelevanceScoring | None = None,
         model: str | None = None,
+        schema: type[BaseModel] | dict[str, Any] | None = None,
     ) -> AskResponse:
         """POST /api/v3/ask, ask a grounded question over indexed documents.
 
@@ -46,6 +49,11 @@ class AskMixin(_VerbClient):
             relevance_scoring: RelevanceScoring, .scoring_and_filtering (default),
                 .scoring_only, or .none.
             model: LLM for answer generation; platform default if omitted.
+            schema: Constrain the answer to structured output, a pydantic model
+                class or a JSON-Schema dict (same inputs as `extract`, sent as
+                the API's `response_format`; must describe an object). The answer
+                then comes back as JSON *text* in `.answer`, parse it with
+                `YourModel.model_validate_json(resp.answer)`.
 
         Returns:
             The answer plus the ranked results used as context.
@@ -59,6 +67,7 @@ class AskMixin(_VerbClient):
             max_results=max_results,
             relevance_scoring=relevance_scoring,
             model=model,
+            response_format=as_json_schema(schema) if schema is not None else None,
         )
         return AskResponse.model_validate(
             self._request("POST", "/api/v3/ask", json=body)
