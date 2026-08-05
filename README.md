@@ -134,7 +134,8 @@ More on file management (list, fetch, tags, delete) and polling in
 
 Four actions live directly on the client. `ask` and `search` query your **indexed**
 documents, scope them with `workspaces=`, `tags=`, or `files=` (objects or bare ids).
-`parse` and `extract` process a document **on the fly**, no indexing required. Full
+`parse` and `extract` process a document **on the fly**, no indexing required,
+`extract` can also target a file you already ingested, with `file=`. Full
 reference at [developers.lighton.ai](https://developers.lighton.ai). The per-verb
 snippets below assume a `client` opened with `with LightOn() as client:`.
 
@@ -155,6 +156,26 @@ resp = client.ask(
 print(resp.answer)
 for r in resp.results:          # the chunks used as grounding
     print(r.source.filename, r.score)
+```
+
+Pass `schema=` to constrain the answer to **structured output**, same inputs as
+`extract` (a pydantic model or a JSON-Schema dict, describing an object). The
+answer comes back as JSON *text* in `.answer`, so parse it yourself:
+
+```python
+from pydantic import BaseModel, Field
+
+
+class Revenue(BaseModel):
+    amount: float = Field(description="Revenue figure, in millions.")
+    currency: str = Field(description="ISO 4217 code, e.g. 'EUR'.")
+    quarter: str | None = Field(None, description="Fiscal quarter, or null.")
+
+
+resp = client.ask("What were Q4 revenues?", workspaces=[42], schema=Revenue)
+revenue = Revenue.model_validate_json(resp.answer)
+print(revenue.amount, revenue.currency)
+print(resp.results)             # sources still come back alongside
 ```
 
 ### `search`: retrieval only, no generation
@@ -206,6 +227,7 @@ per page. See [Extract](#extract) below for the full schema guide.
 
 ```python
 resp = client.extract(schema=InvoiceModel, path="invoice.pdf")
+# or, on a file already in your index: client.extract(schema=InvoiceModel, file=f)
 print(resp.result.data)
 ```
 
@@ -285,7 +307,9 @@ with LightOn() as client:
     doc.delete()
 ```
 
-Once a file reaches `embedded`, it's retrievable by `ask`/`search`.
+Once a file reaches `embedded`, it's retrievable by `ask`/`search`. You can also
+run `extract` straight on it, `client.extract(schema=Invoice, file=doc)`, instead
+of uploading the document a second time (see [Extract](#extract)).
 
 ## Async jobs & polling
 
@@ -359,10 +383,16 @@ for page in job.result.pages:
 
 ## Extract
 
-`extract(schema, *, path | url)` pulls structured data from a document, pass a
-local `path` to upload (multipart) or a public `url` to fetch, exactly one (same
-as `parse`). The `schema` drives guided generation and can be **a pydantic
-model** or a **raw JSON-Schema dict**, use whichever you have.
+`extract(schema, *, path | url | file)` pulls structured data from a document.
+Pass exactly one source:
+
+- `path=`: a local file, uploaded multipart
+- `url=`: a publicly accessible URL the server fetches
+- `file=`: a file **already ingested** into your index (a `File` or a bare id),
+  no re-upload, the cheap option when the document is already there
+
+The `schema` drives guided generation and can be **a pydantic model** or a **raw
+JSON-Schema dict**, use whichever you have.
 
 A pydantic model is the easy path: nested models, `list[...]`, and `X | None`
 fields all convert to a valid vLLM `response_format` schema for you.
@@ -404,7 +434,7 @@ with LightOn() as client:
 
 Or pass the schema dict directly, it's validated against the JSON-Schema
 meta-schema (raises `jsonschema.SchemaError` if malformed), then normalized the
-same way a model is — the endpoint rejects `$ref`, so `$defs`/`$ref` are inlined
+same way a model is: the endpoint rejects `$ref`, so `$defs`/`$ref` are inlined
 whether the schema came from a model class or from your own
 `Model.model_json_schema()` call:
 

@@ -3,9 +3,16 @@
 import json
 
 import httpx
+from pydantic import BaseModel
 
 from lighton import LightOn, LightOnConfiguration, Tag, Workspace
 from lighton.enums import RelevanceScoring
+
+
+class Clause(BaseModel):
+    """A sub-model, so the generated schema has a reference to inline."""
+
+    text: str
 
 
 def make_client(handler) -> LightOn:
@@ -77,3 +84,37 @@ def test_ask_scopes_by_tag_names():
     # names are resolved via Tag.list, mixed with a bare id
     make_client(handler).ask("q", tags=["legal", 4])
     assert seen["body"] == {"query": "q", "tag_id": [4, 3]}
+
+
+def test_ask_structured_output_sends_response_format():
+    seen = {}
+
+    class Verdict(BaseModel):
+        outcome: str
+        clauses: list[Clause]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"results": [], "answer": '{"outcome": "ok"}'})
+
+    resp = make_client(handler).ask("did it pass?", schema=Verdict)
+    fmt = seen["body"]["response_format"]
+    # normalized like extract's: nested sub-model inlined, no $ref for the API to reject
+    assert "$defs" not in fmt and "$ref" not in json.dumps(fmt)
+    assert fmt["properties"]["clauses"]["items"]["properties"]["text"] == {
+        "title": "Text",
+        "type": "string",
+    }
+    # the answer is JSON *text*, the caller parses it
+    assert json.loads(resp.answer) == {"outcome": "ok"}
+
+
+def test_ask_without_schema_omits_response_format():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"results": [], "answer": ""})
+
+    make_client(handler).ask("q")
+    assert "response_format" not in seen["body"]

@@ -16,11 +16,16 @@ def _compact(**kw: Any) -> dict[str, Any]:
     return {k: v for k, v in kw.items() if v is not None}
 
 
+def _id(item: int | Any) -> int:
+    """Coerce a resource or an int to its id (duck-typed on `.id`)."""
+    return item if isinstance(item, int) else item.id
+
+
 def _ids(items: list[int] | list[Any] | None) -> list[int] | None:
     """Coerce a list of resources or ints to a list of ids (duck-typed on `.id`)."""
     if items is None:
         return None
-    return [x if isinstance(x, int) else x.id for x in items]
+    return [_id(x) for x in items]
 
 
 def _inline_refs(node: Any, defs: dict[str, Any]) -> Any:
@@ -127,3 +132,30 @@ def convert_pydantic_to_response_format_json(model: type[BaseModel]) -> dict[str
         A self-contained JSON Schema dict suitable for vLLM guided generation.
     """
     return normalize_response_format_json(model.model_json_schema())
+
+
+def as_json_schema(schema: type[BaseModel] | dict[str, Any]) -> dict[str, Any]:
+    """Either guided-generation input → the self-contained schema to send.
+
+    Shared by `extract` (`schema`, the extraction target) and `ask` (`schema` →
+    `response_format`, constraining the answer). A dict is validated against the
+    JSON-Schema meta-schema (raises on malformed), then normalized; a pydantic
+    model class is converted, which normalizes too. Both go through
+    `normalize_response_format_json` because the endpoints reject `$ref`, and a
+    dict hand-built from `model_json_schema()` carries them just as a class does.
+
+    Args:
+        schema: A pydantic model class or a dict holding a JSON Schema.
+
+    Returns:
+        A self-contained JSON Schema dict, free of `$defs`/`$ref`.
+
+    Raises:
+        jsonschema.exceptions.SchemaError: If a dict schema is malformed.
+        TypeError: If `schema` is neither a dict nor a pydantic model class.
+    """
+    if isinstance(schema, dict):
+        return normalize_response_format_json(validate_response_format_json(schema))
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        return convert_pydantic_to_response_format_json(schema)
+    raise TypeError("schema must be a pydantic BaseModel subclass or a dict")

@@ -7,7 +7,7 @@ import pytest
 from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel
 
-from lighton import ExecMode, LightOn, LightOnConfiguration
+from lighton import ExecMode, File, LightOn, LightOnConfiguration
 from lighton.exceptions import LightOnError
 from lighton.utils import (
     convert_pydantic_to_response_format_json,
@@ -213,3 +213,28 @@ def test_extract_wait_requires_async_mode():
     with pytest.raises(ValueError, match="wait=True"):
         # wait without ASYNC is also a static error, hence the ignore
         client.extract({"type": "object"}, url="https://x/i.pdf", wait=True)  # ty: ignore[no-matching-overload]
+
+
+def test_extract_by_file_id_sends_json():
+    seen = {}
+    raw = {"type": "object", "properties": {"total": {"type": "number"}}}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json=_OK)
+
+    client = make_client(handler)
+    # an already-ingested file: File object or bare id, no re-upload
+    client.extract(raw, file=File(id=7, filename="doc.pdf"))
+    assert seen["body"]["file_id"] == 7 and "document" not in seen["body"]
+    client.extract(raw, file=7)
+    assert seen["body"]["file_id"] == 7
+
+
+def test_extract_requires_exactly_one_source_of_three():
+    client = make_client(lambda req: httpx.Response(200, json=_OK))
+    raw = {"type": "object"}
+    with pytest.raises(ValueError, match="exactly one"):
+        client.extract(raw, url="https://x/i.pdf", file=7)
+    with pytest.raises(ValueError, match="exactly one"):
+        client.extract(raw, path="d.png", file=7)

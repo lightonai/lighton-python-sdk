@@ -4,35 +4,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from pydantic import BaseModel
 
 from lighton.enums import ExecMode
 from lighton.job import ExtractJob
 from lighton.types.api import ExtractJobResponse
-from lighton.utils import (
-    convert_pydantic_to_response_format_json,
-    normalize_response_format_json,
-    validate_response_format_json,
-)
+from lighton.utils import _id, as_json_schema
 from lighton.verbs._base import _VerbClient
 
-
-def _as_json_schema(schema: type[BaseModel] | dict[str, Any]) -> dict[str, Any]:
-    """Either input → the self-contained vLLM guided-generation schema.
-
-    A dict is validated against the JSON-Schema meta-schema (raises on malformed),
-    then normalized; a pydantic model class is converted, which normalizes too.
-    Both go through `normalize_response_format_json` because the endpoint rejects
-    `$ref`, and a dict hand-built from `model_json_schema()` carries them just as
-    a model class does.
-    """
-    if isinstance(schema, dict):
-        return normalize_response_format_json(validate_response_format_json(schema))
-    if isinstance(schema, type) and issubclass(schema, BaseModel):
-        return convert_pydantic_to_response_format_json(schema)
-    raise TypeError("schema must be a pydantic BaseModel subclass or a dict")
+if TYPE_CHECKING:
+    from lighton.file import File
 
 
 class ExtractMixin(_VerbClient):
@@ -43,6 +26,7 @@ class ExtractMixin(_VerbClient):
         *,
         path: str | Path | None = ...,
         url: str | None = ...,
+        file: File | int | None = ...,
         options: dict[str, Any] | None = ...,
         mode: Literal[ExecMode.SYNC] = ...,
     ) -> ExtractJobResponse: ...
@@ -53,6 +37,7 @@ class ExtractMixin(_VerbClient):
         *,
         path: str | Path | None = ...,
         url: str | None = ...,
+        file: File | int | None = ...,
         options: dict[str, Any] | None = ...,
         mode: Literal[ExecMode.ASYNC],
         wait: bool = ...,
@@ -64,6 +49,7 @@ class ExtractMixin(_VerbClient):
         *,
         path: str | Path | None = None,
         url: str | None = None,
+        file: File | int | None = None,
         options: dict[str, Any] | None = None,
         mode: ExecMode = ExecMode.SYNC,
         wait: bool = False,
@@ -74,6 +60,8 @@ class ExtractMixin(_VerbClient):
         Pass exactly one of:
             path: A local file to upload (multipart).
             url: A publicly accessible URL to fetch.
+            file: An already-ingested file (File object or id), no re-upload,
+                the server reads the document it already has.
 
         Args:
             schema: The guided-generation schema driving extraction, either a
@@ -92,18 +80,20 @@ class ExtractMixin(_VerbClient):
             async, pollable (wait=False) or already finished (wait=True).
 
         Raises:
-            ValueError: If not exactly one of path/url is given, or wait=True
+            ValueError: If not exactly one of path/url/file is given, or wait=True
                 without ExecMode.ASYNC (sync already blocks).
             TimeoutError: If wait=True and `timeout` elapses first.
             LightOnError: If wait=True and the job ends in failure.
         """
-        if (path is None) == (url is None):
-            raise ValueError("extract() requires exactly one of 'path' or 'url'")
+        if sum(x is not None for x in (path, url, file)) != 1:
+            raise ValueError(
+                "extract() requires exactly one of 'path', 'url' or 'file'"
+            )
         if wait and mode != ExecMode.ASYNC:
             raise ValueError("wait=True only applies to mode=ExecMode.ASYNC")
         if mode == ExecMode.ASYNC:
             options = {**(options or {}), "async": True}
-        json_schema = _as_json_schema(schema)
+        json_schema = as_json_schema(schema)
         if path is not None:
             path = Path(path)
             # multipart: schema/options ride as JSON-encoded form fields.
@@ -118,7 +108,8 @@ class ExtractMixin(_VerbClient):
                     data=data,
                 )
         else:
-            body: dict[str, Any] = {"document": url, "schema": json_schema}
+            source = {"document": url} if url is not None else {"file_id": _id(file)}
+            body: dict[str, Any] = {**source, "schema": json_schema}
             if options is not None:
                 body["options"] = options
             resp = self._request("POST", "/api/v3/extract", json=body)

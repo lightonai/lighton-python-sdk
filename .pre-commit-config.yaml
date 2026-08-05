@@ -27,8 +27,8 @@ repos:
         name: conventional branch name
         entry: >-
           bash -c 'b=$(git branch --show-current);
-          [ -z "$b" ] || echo "$b" | grep -qE "^(main|master|develop|(feature|fix|bugfix|hotfix|release|chore)/[a-z0-9._/-]+)$"
-          || { echo "branch \"$b\" must be <type>/<description>, e.g. feature/add-retries (types: feature, fix, bugfix, hotfix, release, chore)"; exit 1; }' --
+          [ -z "$b" ] || echo "$b" | grep -qE "^(main|master|develop|(feat|feature|fix|bugfix|hotfix|release|chore)/[a-z0-9._/-]+)$"
+          || { echo "branch \"$b\" must be <type>/<description>, e.g. feat/add-retries (types: feat, feature, fix, bugfix, hotfix, release, chore)"; exit 1; }' --
         language: system
         pass_filenames: false
         always_run: true  # branch name is not tied to any changed file
