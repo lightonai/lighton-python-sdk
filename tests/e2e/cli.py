@@ -52,11 +52,30 @@ PREREQS = ("workspace", "upload")  # implied by --only: the rest build on them
 
 
 class DocumentSummary(BaseModel):
-    """Doc-agnostic extraction schema (see --extract-schema in the module docs)."""
+    """Doc-agnostic extraction schema, flat: no sub-models, so no `$defs`/`$ref`."""
 
     title: str = Field(description="Document title.")
     summary: str = Field(description="One-sentence summary of the document.")
     language: str = Field(description="Primary language, as an ISO 639-1 code.")
+
+
+class Section(BaseModel):
+    """A section heading; sub-model of `DocumentOutline`."""
+
+    heading: str = Field(description="Section heading, verbatim as written.")
+    page: int | None = Field(None, description="Page it starts on; null if unclear.")
+
+
+class DocumentOutline(BaseModel):
+    """Nested schema: `model_json_schema()` emits `$defs`/`$ref` for both sub-models.
+
+    The API 422s on `$ref`, so this only reaches it because the SDK inlines them.
+    Reuses `DocumentSummary` as a sub-model on purpose: the same model then appears
+    both nested and standalone.
+    """
+
+    overview: DocumentSummary = Field(description="Summary of the whole document.")
+    sections: list[Section] = Field(description="Every top-level section heading.")
 
 
 @dataclass
@@ -286,7 +305,7 @@ def parse(c: Ctx) -> None:
 
 @step
 def extract(c: Ctx) -> None:
-    """sync extract → async extract job (schema: DocumentSummary)."""
+    """sync → async job (flat schema) → nested schema, as a model and as a raw dict."""
     doc = c.docs[0]
     r = c.client.extract(DocumentSummary, path=doc)
     assert r.result and r.result.data, "sync extract returned no data"
@@ -297,6 +316,19 @@ def extract(c: Ctx) -> None:
     )
     assert job.result and job.result.data, "async extract returned no data"
     _say(f"async: job {job.id} completed in {job.processing_time_ms}ms")
+
+    # A 422 on either call means $ref reached the API: the SDK stopped inlining.
+    nested = c.client.extract(DocumentOutline, path=doc)
+    assert nested.result and nested.result.data, "nested extract returned no data"
+    _say(f"nested (model class): {nested.result.data}")
+
+    raw = DocumentOutline.model_json_schema()  # carries $defs/$ref verbatim
+    assert "$defs" in raw, "pydantic stopped emitting $defs — this case is now moot"
+    as_dict = c.client.extract(raw, path=doc)
+    assert as_dict.result and as_dict.result.data, (
+        "nested dict extract returned no data"
+    )
+    _say(f"nested (raw dict): {as_dict.result.data}")
 
 
 @step

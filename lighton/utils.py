@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel
 
 _DRAFT = "https://json-schema.org/draft/2020-12/schema"
@@ -36,7 +37,10 @@ def _inline_refs(node: Any, defs: dict[str, Any]) -> Any:
     if isinstance(node, dict):
         ref = node.get("$ref")
         if isinstance(ref, str) and ref.startswith("#/$defs/"):
-            target = defs[ref.rsplit("/", 1)[-1]]
+            name = ref.rsplit("/", 1)[-1]
+            if name not in defs:
+                raise SchemaError(f"unresolved $ref {ref!r}: no such entry in $defs")
+            target = defs[name]
             siblings = {
                 k: _inline_refs(v, defs) for k, v in node.items() if k != "$ref"
             }
@@ -71,8 +75,8 @@ def _collapse_nullable(node: Any) -> Any:
 def validate_response_format_json(schema: dict[str, Any]) -> dict[str, Any]:
     """Validate a raw response_format schema against the draft-2020-12 meta-schema.
 
-    For dict schemas passed straight through to vLLM (no pydantic model to vouch
-    for them), this catches a malformed schema client-side instead of at the API.
+    For dict schemas handed to vLLM without a pydantic model to vouch for them,
+    this catches a malformed schema client-side instead of at the API.
 
     Args:
         schema: A dict holding a JSON Schema.
@@ -87,12 +91,34 @@ def validate_response_format_json(schema: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
+def normalize_response_format_json(schema: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a JSON Schema into the self-contained shape vLLM wants.
+
+    `$defs`/`$ref` inlined, nullable `anyOf` collapsed to `type: [X, "null"]`,
+    draft-2020-12 `$schema` marker added (an existing one is kept). The endpoint
+    rejects `$ref`, so every schema goes through here, whether it came from a
+    pydantic model or was passed in as a dict.
+
+    Args:
+        schema: A dict holding a JSON Schema, possibly with `$defs`/`$ref`.
+
+    Returns:
+        An equivalent self-contained schema, free of `$defs`/`$ref`.
+
+    Raises:
+        jsonschema.exceptions.SchemaError: If a `#/$defs/` ref has no target.
+    """
+    defs = schema.get("$defs", {})
+    inlined = _inline_refs({k: v for k, v in schema.items() if k != "$defs"}, defs)
+    return {"$schema": _DRAFT, **_collapse_nullable(inlined)}
+
+
 def convert_pydantic_to_response_format_json(model: type[BaseModel]) -> dict[str, Any]:
     """Convert a pydantic model class to a vLLM guided-generation `response_format` schema.
 
-    Runs `model_json_schema()`, then normalizes: `$defs`/`$ref` inlined into a
-    self-contained schema, nullable `anyOf` collapsed to `type: [X, "null"]`, and
-    the draft-2020-12 `$schema` marker added.
+    Runs `model_json_schema()` through `normalize_response_format_json`, which a
+    nested model needs: pydantic emits `$defs`/`$ref` for every sub-model and the
+    endpoint rejects those.
 
     Args:
         model: The pydantic model class describing the extraction target.
@@ -100,7 +126,4 @@ def convert_pydantic_to_response_format_json(model: type[BaseModel]) -> dict[str
     Returns:
         A self-contained JSON Schema dict suitable for vLLM guided generation.
     """
-    raw = model.model_json_schema()
-    defs = raw.get("$defs", {})
-    inlined = _inline_refs({k: v for k, v in raw.items() if k != "$defs"}, defs)
-    return {"$schema": _DRAFT, **_collapse_nullable(inlined)}
+    return normalize_response_format_json(model.model_json_schema())
