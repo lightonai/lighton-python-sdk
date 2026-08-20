@@ -40,6 +40,13 @@ class _ActiveRecord(BaseModel):
     def list(cls, client: LightOn, **params: object) -> _list[Self]:
         """List every resource, following pagination to the end.
 
+        Handles both collection shapes the API returns: a paginated
+        `{"results": [...], "next": ...}` envelope, followed to the last page, and a
+        bare array (some endpoints, e.g. company models, return the whole collection
+        at once). Handled here rather than by a per-resource override because `list`
+        is invariant in its element type, so a `list[Self]`-returning override isn't
+        LSP-assignable to the base's and ty rejects it.
+
         Args:
             client: The client used to make the request and bind to each result.
             **params: Optional query filters (e.g. workspace_id) sent on the first page.
@@ -52,6 +59,9 @@ class _ActiveRecord(BaseModel):
         path: str | None = cls._base
         while path:  # follow pagination, no silent truncation
             page = client._request("GET", path, params=query)
+            if isinstance(page, _list):  # unpaginated: nothing to follow
+                items.extend(cls._bind(client, row) for row in page)
+                break
             items.extend(cls._bind(client, row) for row in page["results"])
             path = page.get("next")
             query = None  # `next` already carries the query string

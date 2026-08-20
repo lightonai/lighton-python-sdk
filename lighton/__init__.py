@@ -3,11 +3,13 @@ from importlib.metadata import version
 from lighton._client import LightOn
 from lighton.apikey import ApiKey, ApiKeyScope
 from lighton.batch import BatchIngest, BatchIngestJob, BatchProgress, FailedIngest
+from lighton.company_model import CompanyModel
 from lighton.content_type import Attribute, ContentType, Facet
 from lighton.enums import (
     ExecMode,
     FileStatus,
     JobStatus,
+    ModelType,
     RelevanceScoring,
     Role,
     SearchMode,
@@ -28,6 +30,7 @@ __all__ = [
     "BatchIngest",
     "BatchIngestJob",
     "BatchProgress",
+    "CompanyModel",
     "ContentType",
     "ExecMode",
     "ExtractJob",
@@ -38,6 +41,7 @@ __all__ = [
     "JobStatus",
     "LightOn",
     "LightOnConfiguration",
+    "ModelType",
     "ParseJob",
     "RelevanceScoring",
     "Role",

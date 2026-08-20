@@ -75,3 +75,18 @@ class Role(StrEnum):
     viewer = "viewer"
     editor = "editor"
     owner = "owner"
+
+
+class ModelType(StrEnum):
+    """What a model does, for `CompanyModel.model_type`.
+
+    These four are the documented vocabulary, but the API accepts `model_type` as
+    a free string and doesn't validate it, so (like ``JobStatus``) this is for
+    call-site use, NOT to validate the field: an unrecognized server value
+    compares unequal rather than erroring on response parsing.
+    """
+
+    large_language_model = "Large Language Model"
+    embedding_model = "Embedding Model"
+    vision_language_model = "Vision Language Model"
+    multi_vector_model = "Multi-Vector Model"
