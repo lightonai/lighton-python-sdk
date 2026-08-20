@@ -22,11 +22,12 @@ lighton/
   workspace.py       # Workspace, active-record, lives at root
   apikey.py          # ApiKey / ApiKeyScope, active-record, lives at root
   tag.py             # Tag, active-record (list/create/delete only; no single GET)
+  company_model.py   # CompanyModel, active-record (company custom LLM endpoints)
   content_type.py    # ContentType/Facet/Attribute, content-type taxonomy + file facets
   file.py            # File, active-record + wait_all(); upload = ingestion
   batch.py           # ingest_many() batch upload behavior: BatchIngestJob (threads/poll)
   job.py             # ParseJob/ExtractJob, client-bound async handles you poll()
-  enums.py           # curated StrEnum vocabularies (FileStatus, Role) shared by resources
+  enums.py           # curated StrEnum vocabularies (FileStatus, Role, ModelType) shared by resources
   types/             # PURE DATA schemas only (no behavior)
     client/configuration.py   # LightOnConfiguration
     batch.py                  # BatchIngest / BatchProgress / FailedIngest (batch results)
@@ -112,7 +113,9 @@ Chosen pattern (user preference) over a resource-manager. Shared plumbing lives 
 - `list()` follows pagination fully, no silent truncation. It takes `**params` query
   filters (e.g. `File.list(client, workspace_id=…)`); no typed per-resource override
   because `list` is invariant in its element type, a `list[File]`-returning override
-  isn't LSP-assignable to the base's `list[Self]`, and ty rejects it.
+  isn't LSP-assignable to the base's `list[Self]`, and ty rejects it. That constraint is
+  why it also handles the **bare-array** collection shape (`CompanyModel`) inline, with an
+  `isinstance` branch, instead of letting that resource override it.
 - `_absorb` overwrites **only fields present in the response**, so one-time/local-only
   fields survive a later `refresh()` (see ApiKey.key, File.path below).
 - Curated schema is **independent of the generated api types** (`extra="ignore"` drops noisy response fields). Hand-written models give stable, clean DX; generated ones are ugly and get regenerated.
@@ -156,6 +159,32 @@ response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
 `GET /tags/<id>`, so the inherited `get()`/`refresh()` are overridden to raise
 `NotImplementedError` rather than 404 at runtime. `create()` posts name/description/
 auto_assign. Tags scope `ask`/`search` via `tags=` (OR-matched `tag_id`).
+
+`CompanyModel` (`/api/v3/company/models`) registers a company's own LLM endpoints. Full
+CRUD, with three divergences:
+- **The endpoint returns a bare array**, not a `results`/`next` envelope. Handled by a
+  branch in `_ActiveRecord.list` rather than an override here: `list` is invariant in its
+  element type, so a `list[Self]`-returning override isn't LSP-assignable to the base's and
+  ty rejects it (the same constraint recorded under the base class).
+- **`api_key` is create-only and write-only**: sent by `create()`, never returned by any
+  response. It survives a later `refresh()` for the same reason `ApiKey.key` does, `_absorb`
+  only overwrites fields present in the response. `SecretStr`, so it won't leak in a repr.
+- **`save()` sends only `name`/`is_default`/`temperature`.** `litellm_model`, `endpoint` and
+  `api_key` are fixed at creation (the credential is write-only server-side, so it can't be
+  rewritten without a read-back that doesn't exist). The API **ignores** them silently rather
+  than rejecting them, so sending them would look like it worked. Registering a new model is
+  the way to change them.
+
+Writes need the CompanyAdmin role (`PermissionDeniedError` otherwise). Two unrelated
+failures share a bare 400: temperature above the provider's ceiling, and a deployment not
+running the LiteLLM gateway. They carry no distinguishing code, only a `detail` string, so
+the SDK doesn't branch on them; both surface as `LightOnAPIError`.
+
+`ModelType` (enums.py) is the documented model-type vocabulary, but `model_type` is typed
+`str` on the model, not the enum: the API accepts it as a free string and doesn't validate
+it, so an unrecognized server value must not raise on response parsing (same reasoning as
+`JobStatus`). Deferred: `/company/model-catalog` (the curated per-provider list of routing
+strings that feeds `create()`) and `/api/v3/instance/models` (managed + custom, merged).
 
 ## Batch ingestion (`batch.py`)
 

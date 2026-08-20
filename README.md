@@ -30,6 +30,7 @@ This SDK wraps the LightOn API. Create an account and get an API key on [console
 - [Tags](#tags)
 - [Content types](#content-types)
 - [API keys](#api-keys)
+- [Company models](#company-models)
 - [Client configuration](#client-configuration)
 - [Agent Frameworks](#agent-frameworks)
 
@@ -574,6 +575,55 @@ with LightOn() as client:
     key.save()
     key.delete()
 ```
+
+## Company models
+
+Register your company's own LLM endpoints, your routing string, optionally your address
+and your key, and they become selectable wherever a model is (for example `ask(model=...)`).
+
+Reading is open to any member of the company; creating, updating and deleting need the
+**CompanyAdmin** role and raise `PermissionDeniedError` without it.
+
+```python
+from pydantic import SecretStr
+
+from lighton import CompanyModel, LightOn, ModelType
+
+with LightOn() as client:
+    model = CompanyModel(
+        name="Gemma 4 (local)",
+        litellm_model="openai/google/gemma-4-e4b",  # prefix 'openai/' for an OpenAI-compatible server
+        endpoint="http://localhost:1234/v1",        # omit to use the provider's own
+        api_key=SecretStr("sk-..."),                # omit if the endpoint needs none
+        model_type=ModelType.large_language_model,  # the default
+        temperature=0.2,                            # omit to let each feature choose
+    ).create(client)
+
+    print(model.id, model.technical_name, model.max_temperature)
+
+    for m in CompanyModel.list(client):
+        print(m.id, m.name, m.enabled, m.is_default)
+
+    # Make it the company default, then remove it
+    model.is_default = True
+    model.save()
+    model.delete()
+```
+
+`api_key` is a `SecretStr` so it never shows up in a log line or a `repr()`; it is sent on
+`create()` and no response ever returns it.
+
+`litellm_model`, `endpoint` and `api_key` are **fixed at creation**. The credential is
+write-only on the server, so it cannot be rewritten without first being read back, and it
+cannot be read back. `save()` therefore sends only `name`, `is_default` and `temperature`;
+to change anything else, register a new model. Note the API ignores the immutable fields
+silently rather than rejecting them, so editing them by hand against the raw endpoint looks
+like it worked.
+
+Two distinct failures both come back as a 400 `LightOnAPIError` and are told apart only by
+their message: a `temperature` above the ceiling the model's provider accepts (Anthropic
+allows up to 1.0, OpenAI and Gemini up to 2.0; a model on its own `endpoint` is unbound),
+and a deployment that cannot serve company custom models at all.
 
 ## Client configuration
 

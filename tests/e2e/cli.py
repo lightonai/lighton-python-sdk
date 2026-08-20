@@ -34,6 +34,7 @@ from lighton import (
     ApiKey,
     ApiKeyScope,
     Attribute,
+    CompanyModel,
     ContentType,
     ExecMode,
     File,
@@ -45,6 +46,7 @@ from lighton import (
     Workspace,
     wait_all,
 )
+from lighton.exceptions import LightOnAPIError, PermissionDeniedError
 
 DOCS_DIR = Path(__file__).parent / "documents"
 JOB_TIMEOUT = 300.0
@@ -391,6 +393,50 @@ def keys(c: Ctx) -> None:
     key.save()
     key.refresh()
     assert key.name.endswith("-renamed"), "save() did not persist"
+    _say("list / get / save ok")
+
+
+@step
+def company_models(c: Ctx) -> None:
+    """list → create → get → save → delete (needs CompanyAdmin + the LiteLLM gateway)."""
+    before = CompanyModel.list(c.client)
+    _say(f"list: {len(before)} custom model(s) registered")
+
+    # Writes need CompanyAdmin, and the deployment has to run the LiteLLM gateway to
+    # serve custom models at all. Neither is a broken SDK, so report and stop rather
+    # than failing the run. The 400 carries no distinguishing code, only its detail.
+    model = CompanyModel(
+        name=f"e2e-{c.stamp}",
+        litellm_model="openai/google/gemma-4-e4b",
+        endpoint="http://localhost:1234/v1",
+        temperature=0.2,
+    )
+    try:
+        model.create(c.client)
+    except PermissionDeniedError:
+        _say("skipped writes: key is not a company admin's", typer.colors.YELLOW)
+        return
+    except LightOnAPIError as e:
+        if e.status_code == 400 and "cannot serve company custom models" in str(e):
+            _say(
+                "skipped writes: deployment is not on the LiteLLM gateway",
+                typer.colors.YELLOW,
+            )
+            return
+        raise
+    assert model.id is not None, "create() returned no id"
+    c.cleanup.append(model.delete)
+    _say(f"created {model.id} (technical_name {model.technical_name})")
+
+    assert any(m.id == model.id for m in CompanyModel.list(c.client)), (
+        "missing from list()"
+    )
+    assert CompanyModel.get(c.client, model.id).api_key is None, "get() leaked the key"
+
+    model.name = f"e2e-{c.stamp}-renamed"
+    model.save()
+    model.refresh()
+    assert model.name.endswith("-renamed"), "save() did not persist"
     _say("list / get / save ok")
 
 
