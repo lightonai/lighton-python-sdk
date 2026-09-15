@@ -154,6 +154,16 @@ class BlankEnum(Enum):
     field_ = ""
 
 
+class BudgetAlertBulkToggleResponse(BaseModel):
+    updated: Annotated[
+        int,
+        Field(
+            description="Number of alert thresholds whose state was changed.",
+            title="Updated",
+        ),
+    ]
+
+
 class BudgetAlertResponse(BaseModel):
     model_config = ConfigDict(
         regex_engine="python-re",
@@ -163,6 +173,26 @@ class BudgetAlertResponse(BaseModel):
     threshold_type: Annotated[str, Field(title="Threshold Type")]
     threshold_value: Annotated[
         str, Field(pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$", title="Threshold Value")
+    ]
+
+
+class BudgetCreateOrUpdateRequest(BaseModel):
+    model_config = ConfigDict(
+        regex_engine="python-re",
+    )
+    is_enabled: Annotated[
+        bool | None,
+        Field(
+            description="Whether the budget is actively enforced.", title="Is Enabled"
+        ),
+    ] = True
+    amount_eur: Annotated[
+        str,
+        Field(
+            description="Monthly budget cap in EUR (max 999,999,999.99).",
+            pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,9}|(?=[\\d.]{1,12}0*$)\\d{0,9}\\.\\d{0,2}0*$)",
+            title="Amount Eur",
+        ),
     ]
 
 
@@ -221,10 +251,6 @@ class BudgetResponse(BaseModel):
         list[BudgetAlertResponse] | None,
         Field(description="Alert thresholds.", title="Alerts"),
     ] = None
-
-
-class CommonErrorResponse(BaseModel):
-    error: str
 
 
 class ContentTypeActionRequestActionEnum(StrEnum):
@@ -349,6 +375,34 @@ class DocumentFacetCompactSchema(BaseModel):
     ] = None
 
 
+class DocumentStatusEnum(StrEnum):
+    """
+    * `pending` - Pending
+    * `pending_conversion` - Pending Conversion
+    * `converting` - Converting
+    * `parsing` - Parsing
+    * `parsing_failed` - Parsing Failed
+    * `embedding` - Embedding
+    * `embedding_failed` - Embedding Failed
+    * `embedded` - Embedded
+    * `parsed` - Parsed
+    * `fail` - Fail
+    * `updating` - Updating
+    """
+
+    pending = "pending"
+    pending_conversion = "pending_conversion"
+    converting = "converting"
+    parsing = "parsing"
+    parsing_failed = "parsing_failed"
+    embedding = "embedding"
+    embedding_failed = "embedding_failed"
+    embedded = "embedded"
+    parsed = "parsed"
+    fail = "fail"
+    updating = "updating"
+
+
 class ExternalMetadataRequest(BaseModel):
     """
     Validates external document metadata for V3 file endpoints.
@@ -411,6 +465,7 @@ class ExtractRequest(BaseModel):
     """
 
     document: Annotated[str | None, Field(title="Document")] = None
+    file_id: Annotated[int | None, Field(title="File Id")] = None
     schema_: Annotated[dict[str, Any], Field(alias="schema", title="Schema")]
     options: Annotated[dict[str, Any] | None, Field(title="Options")] = None
 
@@ -422,6 +477,91 @@ class ExtractResult(BaseModel):
 
 class ExtractUsage(BaseModel):
     pages_processed: Annotated[int | None, Field(title="Pages Processed")] = None
+
+
+class Query(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="Search query. Omit to get the full schema context for system prompts.",
+            max_length=2000,
+            title="Query",
+        ),
+    ] = None
+
+
+class Model(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="Model technical name for LLM completion. When provided, the API calls the model with the prompt_context and returns a scope_completion with the parsed and normalized result. Omit to return prompt_context only.",
+            max_length=256,
+            title="Model",
+        ),
+    ] = None
+
+
+class RelevanceScoringEnum1(StrEnum):
+    """
+    Controls the relevance scoring step. Omit (default) to retrieve and score content types by query relevance. "none": Skip retrieval scoring and return all content types (score=0). Useful with model for LLM completion over the full catalog. When 'none', max_results and threshold are ignored.
+    """
+
+    none = "none"
+
+
+class RelevanceScoring(RootModel[RelevanceScoringEnum1 | None]):
+    root: Annotated[
+        RelevanceScoringEnum1 | None,
+        Field(
+            description="Controls the relevance scoring step. Omit (default) to retrieve and score content types by query relevance. \"none\": Skip retrieval scoring and return all content types (score=0). Useful with model for LLM completion over the full catalog. When 'none', max_results and threshold are ignored.",
+            title="Relevance Scoring",
+        ),
+    ] = None
+
+
+class FacetScopeRequest(BaseModel):
+    """
+    Request body for POST /api/v3/content-types/scope.
+    """
+
+    query: Annotated[
+        Query | None,
+        Field(
+            description="Search query. Omit to get the full schema context for system prompts.",
+            title="Query",
+        ),
+    ] = None
+    max_results: Annotated[
+        int | None,
+        Field(
+            description="Max content types to return.",
+            ge=1,
+            le=100,
+            title="Max Results",
+        ),
+    ] = 20
+    threshold: Annotated[
+        float | None,
+        Field(
+            description="[Beta] Score threshold for has_signal. Set to 0 to disable.",
+            ge=0.0,
+            title="Threshold",
+        ),
+    ] = 1.8
+    model: Annotated[
+        Model | None,
+        Field(
+            description="Model technical name for LLM completion. When provided, the API calls the model with the prompt_context and returns a scope_completion with the parsed and normalized result. Omit to return prompt_context only.",
+            title="Model",
+        ),
+    ] = None
+    relevance_scoring: Annotated[
+        RelevanceScoring | None,
+        Field(
+            description="Controls the relevance scoring step. Omit (default) to retrieve and score content types by query relevance. \"none\": Skip retrieval scoring and return all content types (score=0). Useful with model for LLM completion over the full catalog. When 'none', max_results and threshold are ignored.",
+            title="Relevance Scoring",
+        ),
+    ] = None
 
 
 class Id(RootModel[int]):
@@ -445,7 +585,7 @@ class FileCreateRequestSerializerV3(BaseModel):
     - name: Custom filename (optional, defaults to uploaded filename)
     - title: Custom title for the document (optional)
     - workspace_id: Workspace ID where the document will be stored (required)
-    - parser: Deprecated: ignored, the platform always uses its default pipeline
+    - parser: Deprecated — ignored, the platform always uses its default pipeline
     """
 
     file: Annotated[AnyUrl, Field(description="The file to upload (binary data)")]
@@ -569,6 +709,10 @@ class ModeEnum(StrEnum):
 
     text = "text"
     vision = "vision"
+
+
+class NullEnum(RootModel[None]):
+    root: None
 
 
 class Page(BaseModel):
@@ -695,6 +839,57 @@ class ParseUsage(BaseModel):
     pages_processed: int
 
 
+class PatchedBudgetAlertBulkToggleRequest(BaseModel):
+    is_enabled: Annotated[
+        bool,
+        Field(description="Enable or disable all alerts at once.", title="Is Enabled"),
+    ]
+
+
+class ThresholdType(StrEnum):
+    """
+    'percentage' of budget or 'absolute' EUR amount.
+    """
+
+    percentage = "percentage"
+    absolute = "absolute"
+
+
+class ThresholdValue(RootModel[str]):
+    model_config = ConfigDict(
+        regex_engine="python-re",
+    )
+    root: Annotated[
+        str,
+        Field(
+            description="e.g. 75.00 for 75% or 500.00 for 500 EUR.",
+            pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            title="Threshold Value",
+        ),
+    ] = None
+
+
+class PatchedBudgetAlertUpdateRequest(BaseModel):
+    is_enabled: Annotated[
+        bool | None,
+        Field(description="Whether this alert is active.", title="Is Enabled"),
+    ] = None
+    threshold_type: Annotated[
+        ThresholdType | None,
+        Field(
+            description="'percentage' of budget or 'absolute' EUR amount.",
+            title="Threshold Type",
+        ),
+    ] = None
+    threshold_value: Annotated[
+        ThresholdValue | None,
+        Field(
+            description="e.g. 75.00 for 75% or 500.00 for 500 EUR.",
+            title="Threshold Value",
+        ),
+    ] = None
+
+
 class PatchedFileUpdateRequestSerializerV3(BaseModel):
     """
     Request serializer for PATCH /api/v3/files/{id} endpoint.
@@ -703,11 +898,18 @@ class PatchedFileUpdateRequestSerializerV3(BaseModel):
     - title: Update the document title
     - tags: Replace ALL tags for the document (both manual and auto-assigned)
     - external_metadata: Create or update external source metadata
+    - file: Replace the original file and re-ingest (document keeps its id)
 
     Immutable fields (if provided, will return 400):
-    - file, filename, workspace_id, parser, etc.
+    - filename, workspace_id, parser, etc.
     """
 
+    file: Annotated[
+        AnyUrl | None,
+        Field(
+            description="New original file. The document is re-ingested from the new content. Any supported file type is accepted, including one that differs from the current file. Until re-ingestion starts the document still serves its previous content."
+        ),
+    ] = None
     title: Annotated[
         str | None, Field(description="Updated title for the document.", max_length=255)
     ] = None
@@ -725,6 +927,14 @@ class PatchedFileUpdateRequestSerializerV3(BaseModel):
     ] = None
 
 
+class PendingReprocessEnum(StrEnum):
+    reparse = "reparse"
+    rechunk = "rechunk"
+    reembed = "reembed"
+    reembed_vision = "reembed_vision"
+    update = "update"
+
+
 class RelevanceScoringEnum(StrEnum):
     """
     * `none` - none
@@ -737,16 +947,22 @@ class RelevanceScoringEnum(StrEnum):
     scoring_and_filtering = "scoring_and_filtering"
 
 
-class RoleEnum(StrEnum):
+class RootContentTypeEntry(BaseModel):
+    path: str
+    label: str
+    count: int
+
+
+class ScopeCompletion(BaseModel):
     """
-    * `viewer` - viewer
-    * `editor` - editor
-    * `owner` - owner
+    Parsed and normalized LLM scope inference result.
     """
 
-    viewer = "viewer"
-    editor = "editor"
-    owner = "owner"
+    content_type: Annotated[str | None, Field(title="Content Type")] = None
+    attribute: Annotated[list[str] | None, Field(title="Attribute")] = []
+    raw_output: Annotated[str | None, Field(title="Raw Output")] = ""
+    normalized: Annotated[bool | None, Field(title="Normalized")] = False
+    warnings: Annotated[list[str] | None, Field(title="Warnings")] = []
 
 
 class ScopeTypeEnum(StrEnum):
@@ -757,6 +973,16 @@ class ScopeTypeEnum(StrEnum):
 
     workspace = "workspace"
     global_ = "global"
+
+
+class ScoredContentType(BaseModel):
+    path: Annotated[str, Field(title="Path")]
+    label: Annotated[str, Field(title="Label")]
+    root: Annotated[str, Field(title="Root")]
+    score: Annotated[float, Field(title="Score")]
+    chunk_count: Annotated[int, Field(title="Chunk Count")]
+    doc_count: Annotated[int, Field(title="Doc Count")]
+    attributes: Annotated[list[dict[str, Any]] | None, Field(title="Attributes")] = None
 
 
 class SearchBbox(BaseModel):
@@ -935,13 +1161,13 @@ class SearchWarning(BaseModel):
     code: Annotated[
         str,
         Field(
-            description="Signal name from the scores object that degraded (e.g. 'relevance')."
+            description="Signal name from the scores object that degraded (relevance, multivector, vision)."
         ),
     ]
     reason: Annotated[
         str | None,
         Field(
-            description="Machine-readable failure reason (model_not_found, timeout, service_error, unknown)."
+            description="Machine-readable failure reason (model_not_found, embed_failed, timeout, service_error, unknown)."
         ),
     ] = None
 
@@ -965,34 +1191,7 @@ class StandardWorkspaceDatasourceV3RequestTypeEnum(StrEnum):
     sharepoint = "sharepoint"
     servicenow = "servicenow"
     webscrapper = "webscrapper"
-
-
-class StatusEnum(StrEnum):
-    """
-    * `pending` - Pending
-    * `pending_conversion` - Pending Conversion
-    * `converting` - Converting
-    * `parsing` - Parsing
-    * `parsing_failed` - Parsing Failed
-    * `embedding` - Embedding
-    * `embedding_failed` - Embedding Failed
-    * `embedded` - Embedded
-    * `parsed` - Parsed
-    * `fail` - Fail
-    * `updating` - Updating
-    """
-
-    pending = "pending"
-    pending_conversion = "pending_conversion"
-    converting = "converting"
-    parsing = "parsing"
-    parsing_failed = "parsing_failed"
-    embedding = "embedding"
-    embedding_failed = "embedding_failed"
-    embedded = "embedded"
-    parsed = "parsed"
-    fail = "fail"
-    updating = "updating"
+    smb = "smb"
 
 
 class StatusVisionEnum(StrEnum):
@@ -1093,6 +1292,23 @@ class TemplateRootNode(BaseModel):
     ] = {}
 
 
+class ThresholdTypeEnum(StrEnum):
+    percentage = "percentage"
+    absolute = "absolute"
+
+
+class ThumbnailResponseStatusEnum(StrEnum):
+    """
+    * `MISSING` - MISSING
+    * `PROCESSING` - PROCESSING
+    * `READY` - READY
+    """
+
+    MISSING = "MISSING"
+    PROCESSING = "PROCESSING"
+    READY = "READY"
+
+
 class UserRoleEnum(StrEnum):
     """
     * `owner` - owner
@@ -1121,6 +1337,18 @@ class WorkspaceInFileResponseSerializerV3(BaseModel):
     workspace_type: Annotated[
         str, Field(description="Workspace type (shared or personal)")
     ]
+
+
+class WorkspaceMemberRoleEnum(StrEnum):
+    """
+    * `viewer` - viewer
+    * `editor` - editor
+    * `owner` - owner
+    """
+
+    viewer = "viewer"
+    editor = "editor"
+    owner = "owner"
 
 
 class WorkspaceScopedAPIKey(BaseModel):
@@ -1162,6 +1390,11 @@ class WorkspaceSync(BaseModel):
     site_name: str
     client_id: str
     filter_criteria: Any
+
+
+class WorkspaceTaxonomy(BaseModel):
+    classified_files_rate: float
+    root_content_types: list[RootContentTypeEntry]
 
 
 class FieldChunkScoresSchema(BaseModel):
@@ -1213,12 +1446,48 @@ class FieldDatasourceConversionRequestTypeEnum(StrEnum):
     * `googledrive` - googledrive
     * `sharepoint` - sharepoint
     * `webscrapper` - webscrapper
+    * `smb` - smb
     """
 
     servicenow = "servicenow"
     googledrive = "googledrive"
     sharepoint = "sharepoint"
     webscrapper = "webscrapper"
+    smb = "smb"
+
+
+class Mode(StrEnum):
+    """
+    `full_shutdown` blocks all traffic; `warning_banner` also blocks and shows a dismissible toast.
+    """
+
+    full_shutdown = "full_shutdown"
+    warning_banner = "warning_banner"
+
+
+class ServiceMaintenance503(BaseModel):
+    """
+    Returned by the maintenance middleware when the requested endpoint is blocked.
+    """
+
+    detail: Annotated[str, Field(examples=["System is under maintenance."])]
+    error: Annotated[str, Field(examples=["service_maintenance"])]
+    mode: Annotated[
+        Mode,
+        Field(
+            description="`full_shutdown` blocks all traffic; `warning_banner` also blocks and shows a dismissible toast."
+        ),
+    ]
+    reason: Annotated[
+        str | None, Field(description="Operator-supplied maintenance reason, if any.")
+    ] = None
+    started_at: AwareDatetime | None = None
+    endpoint_category_names: Annotated[
+        list[str] | None,
+        Field(
+            description="Non-empty only for category-scoped periods. Empty means all endpoints are affected."
+        ),
+    ] = None
 
 
 class APIKeyScope(BaseModel):
@@ -1236,7 +1505,7 @@ class APIKeyScopeRequest(BaseModel):
     """
 
     workspace_id: Annotated[int, Field(ge=1)]
-    role: RoleEnum
+    role: WorkspaceMemberRoleEnum
 
 
 class APIKeyV3Response(BaseModel):
@@ -1317,9 +1586,15 @@ class AskRequest(BaseModel):
     model: Annotated[
         str | None,
         Field(
-            description="LLM used for answer generation. Standard values:\n- `mistral-large-latest`: Mistral Large 2 — flagship general-purpose model. Best answer quality (default).\n- `alfred-ft5`: Alfred FT5 — LightOn fine-tuned model, lighter and faster for straightforward questions.\nCustom model technical names (e.g. `custom-{company_id}-{uuid}`) are also accepted."
+            description="LLM used for answer generation. Omit to use the default model configured for your organization.\nAccepted values are the technical names your deployment offers publicly, your organization's own default, and any model your organization registered itself (e.g. `custom-{company_id}-{uuid}`). Call `GET /api/v3/instance/models` for the current list — every model it returns can be named here."
         ),
-    ] = "mistral-large-latest"
+    ] = None
+    response_format: Annotated[
+        Any | None,
+        Field(
+            description='JSON Schema object for structured output. When provided, the LLM answer is constrained to match this schema. Must have `type: "object"` and `properties`.'
+        ),
+    ] = None
 
 
 class BatchResponse(BaseModel):
@@ -1362,6 +1637,45 @@ class BrowseFolderItem(BaseModel):
             description="Item kind. SharePoint root returns 'library' entries (document libraries); everything else is 'folder'.\n\n* `library` - library\n* `folder` - folder"
         ),
     ] = "folder"
+
+
+class BudgetAlertCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        regex_engine="python-re",
+    )
+    is_enabled: Annotated[
+        bool | None,
+        Field(description="Whether this alert is active.", title="Is Enabled"),
+    ] = True
+    threshold_type: Annotated[
+        ThresholdTypeEnum,
+        Field(
+            description="'percentage' of budget or 'absolute' EUR amount.",
+            title="Threshold Type",
+        ),
+    ]
+    threshold_value: Annotated[
+        str,
+        Field(
+            description="e.g. 75.00 for 75% or 500.00 for 500 EUR.",
+            pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            title="Threshold Value",
+        ),
+    ]
+
+
+class BudgetAlertListResponse(RootModel[list[BudgetAlertResponse]]):
+    """
+    Bare JSON array of alert thresholds — the body of GET /billing/budget/alerts.
+    """
+
+    root: Annotated[
+        list[BudgetAlertResponse],
+        Field(
+            description="Bare JSON array of alert thresholds — the body of GET /billing/budget/alerts.",
+            title="BudgetAlertListResponse",
+        ),
+    ]
 
 
 class ContentTypeActionRequest(BaseModel):
@@ -1510,45 +1824,6 @@ class ExtractJobResponse(BaseModel):
     progress: JobProgress | None = None
 
 
-class FileCreateResponseSerializerV3(BaseModel):
-    id: int
-    filename: Annotated[str, Field(description="Filename of the document")]
-    workspace: Annotated[
-        WorkspaceInFileResponseSerializerV3 | None,
-        Field(description="Workspace the document belongs to"),
-    ]
-    summaries: Annotated[
-        list[DocumentSummaryResponse],
-        Field(description="Document summaries (all languages)"),
-    ]
-    title: Annotated[str | None, Field(max_length=255)] = None
-    extension: Annotated[str, Field(description="File extension of the document")]
-    status: StatusEnum | None = None
-    status_vision: StatusVisionEnum | None = None
-    created_at: Annotated[
-        AwareDatetime, Field(description="Creation date of the resource")
-    ]
-    updated_at: AwareDatetime
-    total_pages: Annotated[int, Field(description="Total number of pages")]
-    tags: Annotated[
-        list[TagItem], Field(description="List of tags associated with the document")
-    ]
-    created_by: Annotated[
-        CreatedBy | None,
-        Field(
-            description="User who created the file. Null when the file was created by the system."
-        ),
-    ]
-    upload_session_uuid: Annotated[
-        UUID | None,
-        Field(description="Upload session UUID associated with this document"),
-    ]
-    external_metadata: Annotated[
-        ExternalMetadataResponse | None, Field(description="External document metadata")
-    ]
-    message: Annotated[str, Field(description="Status message about the file upload")]
-
-
 class FileFacetActionRequest(BaseModel):
     """
     Write operation for a file's facets (classifications + attribute values).
@@ -1594,79 +1869,6 @@ class FileFacetBatchRequest(BaseModel):
     actions: Annotated[
         list[FileFacetActionRequest],
         Field(max_length=50, min_length=1, title="Actions"),
-    ]
-
-
-class FileRetrieveResponseSerializerV3(BaseModel):
-    id: int
-    filename: Annotated[str, Field(description="Filename of the document")]
-    workspace: Annotated[
-        WorkspaceInFileResponseSerializerV3 | None,
-        Field(description="Workspace the document belongs to"),
-    ]
-    summaries: Annotated[
-        list[DocumentSummaryResponse],
-        Field(description="Document summaries (all languages)"),
-    ]
-    title: Annotated[str | None, Field(max_length=255)] = None
-    extension: Annotated[str, Field(description="File extension of the document")]
-    status: StatusEnum | None = None
-    status_vision: StatusVisionEnum | None = None
-    created_at: Annotated[
-        AwareDatetime, Field(description="Creation date of the resource")
-    ]
-    updated_at: AwareDatetime
-    total_pages: Annotated[int, Field(description="Total number of pages")]
-    size: Annotated[int | None, Field(description="Size of the file in bytes.")] = None
-    tags: Annotated[
-        list[TagItem], Field(description="List of tags associated with the document")
-    ]
-    created_by: Annotated[
-        CreatedBy | None,
-        Field(
-            description="User who created the file. Null when the file was created by the system."
-        ),
-    ]
-    upload_session_uuid: Annotated[
-        UUID | None,
-        Field(description="Upload session UUID associated with this document"),
-    ]
-    signature: Annotated[
-        str | None, Field(description="TLSH hash for duplicate detection.")
-    ]
-    content: Annotated[
-        str | None,
-        Field(
-            deprecated=True,
-            description="Deprecated — use `pages[]` instead. Full text content of the document, derived from per-page text, as a single flat string. Only included when include_content=true query parameter is provided. Will be removed in a future release.",
-        ),
-    ] = None
-    pages: Annotated[
-        list[Page] | None,
-        Field(
-            description="Per-page document text in the canonical `{ index, markdown }` shape shared with /parse and /ocr. Only included when include_content=true. Intended replacement for the flat `content` string. For documents ingested before per-page text was stored, the full `content` is returned as a single page (index 1); empty only when there is no content at all."
-        ),
-    ] = None
-    status_detail: Annotated[
-        str | None,
-        Field(
-            description="Detailed error information. Only present when document processing has failed."
-        ),
-    ] = None
-    parser: Annotated[
-        str | None,
-        Field(
-            description="Parser/ingestion pipeline used for document processing (e.g., 'v2.1', 'v3.0'). "
-        ),
-    ] = None
-    external_metadata: Annotated[
-        ExternalMetadataResponse | None, Field(description="External document metadata")
-    ] = None
-    content_types: Annotated[
-        list[DocumentFacetCompactSchema],
-        Field(
-            description="Facet content types with nested attribute values. Excludable via ?exclude=content_types."
-        ),
     ]
 
 
@@ -1765,6 +1967,13 @@ class RelevantChunkScoredV3(BaseModel):
     scores: FieldChunkScoresSchema
 
 
+class RootGroup(BaseModel):
+    root: Annotated[str, Field(title="Root")]
+    root_label: Annotated[str, Field(title="Root Label")]
+    max_score: Annotated[float, Field(title="Max Score")]
+    content_types: Annotated[list[ScoredContentType], Field(title="Content Types")]
+
+
 class SearchDetails(BaseModel):
     """
     Serializer for search details in file list response.
@@ -1853,11 +2062,31 @@ class StandardWorkspaceV3ListResponse(BaseModel):
     user_role: UserRoleEnum | BlankEnum
     sync: WorkspaceSync | None
     scoped_api_keys: list[WorkspaceScopedAPIKey]
+    taxonomy: WorkspaceTaxonomy | None
 
 
 class TemplateListResponse(BaseModel):
     content_types: Annotated[list[TemplateRootNode], Field(title="Content Types")]
     playbooks: Annotated[dict[str, Any] | None, Field(title="Playbooks")] = None
+
+
+class ThumbnailResponse(BaseModel):
+    """
+    Thumbnail status and URL for file responses.
+    """
+
+    status: Annotated[
+        ThumbnailResponseStatusEnum,
+        Field(
+            description="Thumbnail generation status: MISSING (not available), PROCESSING (being generated), READY (available)\n\n* `MISSING` - MISSING\n* `PROCESSING` - PROCESSING\n* `READY` - READY"
+        ),
+    ]
+    url: Annotated[
+        str | None,
+        Field(
+            description="Relative URL to the thumbnail image (WebP, 256x256). Null when status is not READY."
+        ),
+    ]
 
 
 class WorkspaceDatasourceBrowseV3Request(BaseModel):
@@ -1890,20 +2119,20 @@ class FieldDatasourceConversionRequest(BaseModel):
     type: Annotated[
         FieldDatasourceConversionRequestTypeEnum,
         Field(
-            description="Datasource provider.\n\n* `servicenow` - servicenow\n* `googledrive` - googledrive\n* `sharepoint` - sharepoint\n* `webscrapper` - webscrapper"
+            description="Datasource provider.\n\n* `servicenow` - servicenow\n* `googledrive` - googledrive\n* `sharepoint` - sharepoint\n* `webscrapper` - webscrapper\n* `smb` - smb"
         ),
     ]
     name: Annotated[str, Field(description="Display name for the datasource.")]
     credentials: Annotated[
         dict[str, Any] | None,
         Field(
-            description="Provider credentials. googledrive: service_account_file (JSON string). sharepoint: client_id, client_secret, tenant_id, site_id (opt), site_name (opt), instance_url (opt). servicenow: instance_url, username, password. webscrapper: none required."
+            description="Provider credentials. googledrive: service_account_file (JSON string). sharepoint: client_id, client_secret, tenant_id, site_id (opt), site_name (opt), instance_url (opt). servicenow: instance_url, username, password. webscrapper: none required. smb: instance_url (smb://host[:port]), username, password."
         ),
     ] = None
     filter_criteria: Annotated[
         dict[str, Any] | None,
         Field(
-            description="Provider filter criteria. googledrive: folder_id (required), recursive (opt). sharepoint: folder_path (required), recursive (opt). servicenow: doc_type (required, e.g. 'knowledge'). webscrapper: start_url (required)."
+            description="Provider filter criteria. googledrive: folder_id (required), recursive (opt). sharepoint: folder_path (required), recursive (opt). servicenow: doc_type (required, e.g. 'knowledge'). webscrapper: start_url (required). smb: share_name (required), path (opt), recursive (opt)."
         ),
     ] = None
 
@@ -1943,6 +2172,57 @@ class AskResultItem(BaseModel):
     ] = None
 
 
+class FacetScopeResponse(BaseModel):
+    has_signal: Annotated[bool, Field(title="Has Signal")]
+    groups: Annotated[list[RootGroup], Field(title="Groups")]
+    prompt_context: Annotated[str | None, Field(title="Prompt Context")] = None
+    prompt_version: Annotated[str | None, Field(title="Prompt Version")] = None
+    scope_completion: ScopeCompletion | None = None
+
+
+class FileCreateResponseSerializerV3(BaseModel):
+    id: int
+    filename: Annotated[str, Field(description="Filename of the document")]
+    workspace: Annotated[
+        WorkspaceInFileResponseSerializerV3 | None,
+        Field(description="Workspace the document belongs to"),
+    ]
+    summaries: Annotated[
+        list[DocumentSummaryResponse],
+        Field(description="Document summaries (all languages)"),
+    ]
+    title: Annotated[str | None, Field(max_length=255)] = None
+    extension: Annotated[str, Field(description="File extension of the document")]
+    status: DocumentStatusEnum | None = None
+    status_vision: StatusVisionEnum | None = None
+    created_at: Annotated[
+        AwareDatetime, Field(description="Creation date of the resource")
+    ]
+    updated_at: AwareDatetime
+    total_pages: Annotated[int, Field(description="Total number of pages")]
+    tags: Annotated[
+        list[TagItem], Field(description="List of tags associated with the document")
+    ]
+    created_by: Annotated[
+        CreatedBy | None,
+        Field(
+            description="User who created the file. Null when the file was created by the system."
+        ),
+    ]
+    upload_session_uuid: Annotated[
+        UUID | None,
+        Field(description="Upload session UUID associated with this document"),
+    ]
+    external_metadata: Annotated[
+        ExternalMetadataResponse | None, Field(description="External document metadata")
+    ]
+    message: Annotated[str, Field(description="Status message about the file upload")]
+    thumbnail: Annotated[
+        ThumbnailResponse,
+        Field(description="Thumbnail preview of the document (256x256 WebP)."),
+    ]
+
+
 class FileListResponseSerializerV3(BaseModel):
     id: int
     filename: Annotated[str, Field(description="Filename of the document")]
@@ -1956,7 +2236,7 @@ class FileListResponseSerializerV3(BaseModel):
     ] = None
     title: Annotated[str | None, Field(max_length=255)] = None
     extension: Annotated[str, Field(description="File extension of the document")]
-    status: StatusEnum | None = None
+    status: DocumentStatusEnum | None = None
     status_detail: Annotated[
         str | None,
         Field(
@@ -2008,6 +2288,99 @@ class FileListResponseSerializerV3(BaseModel):
         list[DocumentFacetCompactSchema],
         Field(
             description="Facet content types with nested attribute values. Excludable via ?exclude=content_types."
+        ),
+    ]
+    thumbnail: Annotated[
+        ThumbnailResponse,
+        Field(description="Thumbnail preview of the document (256x256 WebP)."),
+    ]
+    pending_reprocess: Annotated[
+        PendingReprocessEnum | NullEnum,
+        Field(
+            description="The reprocessing level queued for this document, or null when none is. Non-null means work has been accepted but has not started yet — `status` and `status_vision` still describe the previous run. It clears the moment processing starts, from which point the statuses track the new run. `update` (a file replacement) additionally leaves the file-derived fields (`filename`, `extension`, `size`, `total_pages`, `signature`, `summaries`, `content`) describing the previous file until then."
+        ),
+    ]
+
+
+class FileRetrieveResponseSerializerV3(BaseModel):
+    id: int
+    filename: Annotated[str, Field(description="Filename of the document")]
+    workspace: Annotated[
+        WorkspaceInFileResponseSerializerV3 | None,
+        Field(description="Workspace the document belongs to"),
+    ]
+    summaries: Annotated[
+        list[DocumentSummaryResponse],
+        Field(description="Document summaries (all languages)"),
+    ]
+    title: Annotated[str | None, Field(max_length=255)] = None
+    extension: Annotated[str, Field(description="File extension of the document")]
+    status: DocumentStatusEnum | None = None
+    status_vision: StatusVisionEnum | None = None
+    created_at: Annotated[
+        AwareDatetime, Field(description="Creation date of the resource")
+    ]
+    updated_at: AwareDatetime
+    total_pages: Annotated[int, Field(description="Total number of pages")]
+    size: Annotated[int | None, Field(description="Size of the file in bytes.")] = None
+    tags: Annotated[
+        list[TagItem], Field(description="List of tags associated with the document")
+    ]
+    created_by: Annotated[
+        CreatedBy | None,
+        Field(
+            description="User who created the file. Null when the file was created by the system."
+        ),
+    ]
+    upload_session_uuid: Annotated[
+        UUID | None,
+        Field(description="Upload session UUID associated with this document"),
+    ]
+    signature: Annotated[
+        str | None, Field(description="TLSH hash for duplicate detection.")
+    ]
+    content: Annotated[
+        str | None,
+        Field(
+            deprecated=True,
+            description="Deprecated — use `pages[]` instead. Full text content of the document, derived from per-page text, as a single flat string. Only included when include_content=true query parameter is provided. Will be removed in a future release.",
+        ),
+    ] = None
+    pages: Annotated[
+        list[Page] | None,
+        Field(
+            description="Per-page document text in the canonical `{ index, markdown }` shape shared with /parse and /ocr. Only included when include_content=true. Intended replacement for the flat `content` string. For documents ingested before per-page text was stored, the full `content` is returned as a single page (index 1); empty only when there is no content at all."
+        ),
+    ] = None
+    status_detail: Annotated[
+        str | None,
+        Field(
+            description="Detailed error information. Only present when document processing has failed."
+        ),
+    ] = None
+    parser: Annotated[
+        str | None,
+        Field(
+            description="Parser/ingestion pipeline used for document processing (e.g., 'v2.1', 'v3.0'). "
+        ),
+    ] = None
+    external_metadata: Annotated[
+        ExternalMetadataResponse | None, Field(description="External document metadata")
+    ] = None
+    content_types: Annotated[
+        list[DocumentFacetCompactSchema],
+        Field(
+            description="Facet content types with nested attribute values. Excludable via ?exclude=content_types."
+        ),
+    ]
+    thumbnail: Annotated[
+        ThumbnailResponse,
+        Field(description="Thumbnail preview of the document (256x256 WebP)."),
+    ]
+    pending_reprocess: Annotated[
+        PendingReprocessEnum | NullEnum,
+        Field(
+            description="The reprocessing level queued for this document, or null when none is. Non-null means work has been accepted but has not started yet — `status` and `status_vision` still describe the previous run. It clears the moment processing starts, from which point the statuses track the new run. `update` (a file replacement) additionally leaves the file-derived fields (`filename`, `extension`, `size`, `total_pages`, `signature`, `summaries`, `content`) describing the previous file until then."
         ),
     ]
 

@@ -2,8 +2,9 @@
 
 StrEnum, not Enum: members ARE strings, so `file.status == "embedded"` and
 membership in a plain-string set keep working, no `.value` needed at call sites.
-Values mirror the generated api types (StatusEnum, RoleEnum); regenerate those
-and update here if the server vocabulary changes.
+Values mirror the generated api types (DocumentStatusEnum,
+WorkspaceMemberRoleEnum); regenerate those and update here if the server
+vocabulary changes.
 """
 
 from __future__ import annotations
