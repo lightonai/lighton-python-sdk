@@ -284,6 +284,8 @@ with LightOn() as client:
 Uploading a file into a workspace *is* the ingestion, there's no separate job to
 track. The returned `File` carries a processing `status`; poll it with `refresh()`,
 or `wait()` to block until it's embedded. Ingestion is **non-blocking by default**.
+Once it's through, the document keeps both its original bytes and the text the
+platform parsed, reachable with `download()` and `pages()`.
 
 ```python
 from lighton import LightOn, Workspace, File, wait_all
@@ -319,6 +321,10 @@ with LightOn() as client:
     doc.title = "Q4 Report"
     doc.save()
 
+    # Read back the text parsed at ingestion, no re-upload (see Getting the bytes back)
+    for page in doc.pages():
+        print(page.index, page.markdown)
+
     # Assign / remove tags, by Tag object, id, or name (see Tags below)
     doc.tag([7, "contracts"])
     doc.untag([12])
@@ -336,6 +342,49 @@ with LightOn() as client:
 if any id is unknown or isn't yours the API rejects the whole call and deletes
 nothing, which surfaces as a `NotFoundError`. There is no partial-success report
 because there is no partial success. An empty list is a local no-op.
+
+### Getting the bytes back
+
+Retrieval gives you passages; sometimes you need the document itself, to show it in a
+UI or hand it to another tool. `download()` returns the stored bytes:
+
+```python
+from pathlib import Path
+from lighton import DownloadPurpose
+
+Path("report.pdf").write_bytes(doc.download())                       # as uploaded
+Path("render.pdf").write_bytes(doc.download(DownloadPurpose.rendered_pdf))
+```
+
+Already-ingested documents keep the text the platform parsed at ingestion, so you
+can read it back instead of re-uploading and re-parsing:
+
+```python
+for page in doc.pages():
+    print(page.index, page.markdown)
+```
+
+That's the **same** `{index, markdown}` shape [`parse`](#parse-document--markdown)
+returns, the same `Page` model, so code can move between parsing a local file and
+reading an ingested one without reshaping anything. It costs an extra request (the
+text can be large), so it isn't part of `refresh()`.
+
+`purpose=` picks which stored version you get (`original`, `rendered_pdf`,
+`transcript`); the server falls back to `original` when a document has no such
+rendition, so it won't 404 on you for that.
+
+Thumbnails (256x256 WebP) are generated asynchronously and **independently of
+ingestion**, so an `embedded` file may still have none. Check before you fetch:
+
+```python
+from lighton import ThumbnailStatus
+
+doc.refresh()
+if doc.thumbnail and doc.thumbnail.status is ThumbnailStatus.READY:
+    Path("thumb.webp").write_bytes(doc.download_thumbnail())
+```
+
+Fetching one that isn't `READY` raises `NotFoundError`.
 
 ### External metadata
 

@@ -12,6 +12,26 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+class DownloadPurpose(StrEnum):
+    """Which stored version of a file to download.
+
+    The server falls back to `original` when the requested purpose has no
+    associated file.
+    """
+
+    original = "original"
+    rendered_pdf = "rendered_pdf"
+    transcript = "transcript"
+
+
+class ThumbnailStatus(StrEnum):
+    """Whether a file's thumbnail has been generated (uppercase, as the API sends)."""
+
+    MISSING = "MISSING"
+    PROCESSING = "PROCESSING"
+    READY = "READY"
+
+
 class AttributeType(StrEnum):
     """Type of a content-type attribute column.
 

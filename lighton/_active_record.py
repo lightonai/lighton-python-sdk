@@ -14,7 +14,7 @@ from __future__ import annotations
 
 # The list() classmethod shadows builtin list in annotations (class scope).
 from builtins import list as _list
-from typing import TYPE_CHECKING, ClassVar, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
@@ -98,7 +98,7 @@ class _ActiveRecord(BaseModel):
             raise ValueError(f"{self._resource} must be created or retrieved first")
         return self._client
 
-    def _api(self, method: str, path: str, **kwargs: object):
+    def _api(self, method: str, path: str, **kwargs: Any):
         return self._bound_client()._request(method, path, **kwargs)
 
     @classmethod
