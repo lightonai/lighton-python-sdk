@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -21,8 +22,12 @@ def _id(item: int | Any) -> int:
     return item if isinstance(item, int) else item.id
 
 
-def _ids(items: list[int] | list[Any] | None) -> list[int] | None:
-    """Coerce a list of resources or ints to a list of ids (duck-typed on `.id`)."""
+def _ids(items: Sequence[Any] | None) -> list[int] | None:
+    """Coerce a sequence of resources or ints to a list of ids (duck-typed on `.id`).
+
+    Sequence, not list: `list` is invariant, so a `list[File]` (what `File.list()`
+    returns) wouldn't satisfy a `list[File | int]` parameter.
+    """
     if items is None:
         return None
     return [_id(x) for x in items]

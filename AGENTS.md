@@ -162,6 +162,17 @@ response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
   at a settle window. `ReprocessLevel` (enums.py, StrEnum, mirrors
   `PendingReprocessEnum`) has a documented domain, so it gets enumerated per the enum
   policy above.
+- **`delete_many(client, files)`** (classmethod) POSTs `{"ids": [...]}` to
+  `/files/bulk-delete`, the bulk sibling of the per-file `delete()`, since teardown and
+  corpus-replacement flows were one request per file. Takes `File` objects or bare ids
+  through `_ids()`, and clears `id` on any objects passed, as `delete()` does. Typed
+  `Sequence[File | int]`, **not** `list[File | int]`: `list` is invariant, so the
+  obvious call (`delete_many(client, File.list(...))`, a `list[File]`) wouldn't
+  type-check, `_ids()` was widened to `Sequence[Any]` for the same reason. Verified
+  live that the endpoint is **all-or-nothing**: one unknown id returns 404 `some of the
+  specified documents not found` and deletes *nothing*, so the SDK **raises**
+  (`NotFoundError`) instead of returning a per-file report, there is no partial state
+  to report on. An empty list is a local no-op because the endpoint 422s on `[]`.
 - **`tag()`/`untag()`** assign/remove tags post-upload; both accept `Tag` objects, ids,
   **or names** via `tag.resolve_ids(client, ...)`, names are resolved through a single
   `Tag.list()` and an unknown name raises `ValueError` (fail loud, not silent no-tag).

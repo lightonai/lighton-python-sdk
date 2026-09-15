@@ -533,6 +533,15 @@ def batch(c: Ctx) -> None:
     assert out.ok, f"async batch failures: {[str(x.error) for x in out.failed]}"
     _say(f"async: {len(out.succeeded)} ingested")
 
+    # Tear the corpus down in one request instead of one DELETE per file.
+    doomed = File.list(c.client, workspace_id=ws.id)
+    keep = c.uploaded().id  # the shared file, later steps still need it
+    doomed = [f for f in doomed if f.id != keep]
+    File.delete_many(c.client, doomed)
+    left = {f.id for f in File.list(c.client, workspace_id=ws.id)}
+    assert left == {keep}, f"bulk delete left {left - {keep}} behind"
+    _say(f"bulk-deleted {len(doomed)} file(s) in one request, {len(left)} left")
+
 
 @step
 def keys(c: Ctx) -> None:

@@ -478,3 +478,46 @@ def test_replace_needs_an_id(tmp_path):
     new.write_bytes(b"x")
     with pytest.raises(ValueError, match="created or retrieved"):
         File(path=new).replace(new)
+
+
+def test_delete_many_posts_ids_and_clears_them():
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent["method"] = request.method
+        sent["path"] = request.url.path
+        sent["body"] = json.loads(request.content)
+        return httpx.Response(204)
+
+    client = _make_client(handler)
+    doomed = File(id=7)
+    File.delete_many(client, [doomed, 8])  # File objects and bare ids mix
+
+    assert (sent["method"], sent["path"]) == ("POST", "/api/v3/files/bulk-delete")
+    assert sent["body"] == {"ids": [7, 8]}
+    assert doomed.id is None, "a deleted File should not keep a dangling id"
+
+
+def test_delete_many_empty_sends_nothing():
+    # The endpoint 422s on an empty list, so an empty call is a local no-op.
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no request should be made for an empty list")
+
+    File.delete_many(_make_client(handler), [])
+
+
+def test_delete_many_is_all_or_nothing_on_a_bad_id():
+    # Live behaviour: one unknown id and the API deletes NOTHING, so the error
+    # must propagate rather than read as a partial success.
+    from lighton.exceptions import NotFoundError
+
+    survivor = File(id=7)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404, json={"detail": "some of the specified documents not found."}
+        )
+
+    with pytest.raises(NotFoundError, match="not found"):
+        File.delete_many(_make_client(handler), [survivor, 999999999])
+    assert survivor.id == 7, "nothing was deleted, the id must survive"
