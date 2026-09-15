@@ -19,7 +19,14 @@ from lighton.enums import (
 from lighton.file import File, wait_all
 from lighton.job import ExtractJob, ParseJob
 from lighton.tag import Tag
-from lighton.types import ExternalMetadata, LightOnConfiguration, Thumbnail
+from lighton.types import (
+    ExternalMetadata,
+    LightOnConfiguration,
+    RootContentType,
+    Thumbnail,
+    WorkspaceSync,
+    WorkspaceTaxonomy,
+)
 from lighton.workspace import Workspace
 
 __version__ = version(
@@ -49,11 +56,14 @@ __all__ = [
     "RelevanceScoring",
     "ReprocessLevel",
     "Role",
+    "RootContentType",
     "SearchMode",
     "Tag",
     "Template",
     "Thumbnail",
     "ThumbnailStatus",
     "Workspace",
+    "WorkspaceSync",
+    "WorkspaceTaxonomy",
     "wait_all",
 ]

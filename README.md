@@ -279,6 +279,33 @@ with LightOn() as client:
     ws.delete()
 ```
 
+### What a listing tells you
+
+`Workspace.list()` carries a few read-only fields worth knowing about, so you can
+survey an account without a request per workspace:
+
+```python
+for w in Workspace.list(client):
+    print(w.name, w.files_count, w.user_role)     # your role: owner / editor / viewer
+
+    if w.taxonomy:                                 # classification coverage
+        print(f"  {w.taxonomy.classified_files_rate:.0%} classified")
+        for root in w.taxonomy.root_content_types:
+            print("  ", root.label, root.count)
+
+    if w.sync:                                     # connected datasource, if any
+        print("  synced from", w.sync.datasource_type, w.sync.last_status)
+```
+
+`taxonomy` is the cheapest way to see how much of a workspace is classified (see
+[Content types](#content-types)); it's `None` until something is. `sync` is `None`
+for workspaces you upload to directly, and `user_role` is `None` when you hold no
+role on the workspace.
+
+One wrinkle: **only `list()` returns `taxonomy`**. The detail endpoint leaves the
+field out, so `get()` and `refresh()` neither populate it nor clear an already-loaded
+value; re-list when you want fresh coverage numbers.
+
 ## Files & ingestion
 
 Uploading a file into a workspace *is* the ingestion, there's no separate job to
