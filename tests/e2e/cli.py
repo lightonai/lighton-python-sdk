@@ -456,6 +456,63 @@ def extract(c: Ctx) -> None:
 
 
 @step
+def replace(c: Ctx) -> None:
+    """replace the file content in place: same id, tags and classifications survive."""
+    f = c.uploaded()
+    before = (f.id, f.title, f.total_pages, f.size)
+    # `tags` isn't a File model field (the response shape would clash on _absorb),
+    # so read them off the raw payload.
+    tags_before = _tag_ids(c, f)
+    facets_before = {x.path for x in f.facets()}
+
+    # A document whose byte size differs, so "the content changed" is checkable.
+    new = next((d for d in c.docs[1:] if d.stat().st_size != f.size), None)
+    if new is None:
+        _say("no second document of a different size, nothing to replace with")
+        return
+
+    # The PATCH lands a queued reprocess next to the previous run's status: the
+    # exact window where a naive wait() would report success for unstarted work.
+    f.replace(new)
+    assert f.pending_reprocess == "update", (
+        f"expected a queued reprocess, got {f.pending_reprocess!r}"
+    )
+    _say(
+        f"queued: pending_reprocess={f.pending_reprocess!r} beside stale status={f.status!r}"
+    )
+
+    f.wait()
+    assert f.pending_reprocess is None, "wait() returned with a reprocess still queued"
+    f.refresh()
+    _say(
+        f"replaced with {new.name}: {before[2]} pages/{before[3]}B → {f.total_pages} pages/{f.size}B"
+    )
+
+    _say(f"filename now {f.filename!r}, title still {f.title!r}")
+    assert f.id == before[0], "the id changed, that is the whole point of replace()"
+    assert f.title == before[1], "title should survive, it is the user-facing name"
+    assert f.filename == new.name, (
+        f"filename should follow the new file, got {f.filename!r}"
+    )
+    assert (f.total_pages, f.size) != before[2:], "content did not change"
+    assert f.status in ("embedded", "parsed"), f"re-ingestion ended {f.status}"
+
+    assert _tag_ids(c, f) == tags_before, "tags did not survive the replace"
+    assert {x.path for x in f.facets()} == facets_before, (
+        "classifications did not survive the replace"
+    )
+    _say(
+        f"survived: tags {tags_before or '(none)'}, facets {facets_before or '(none)'}"
+    )
+
+
+def _tag_ids(c: Ctx, f: File) -> set[int]:
+    """The file's tag ids, straight off the API payload (File models no `tags` field)."""
+    data = c.client._request("GET", f"/api/v3/files/{f.id}")
+    return {t["id"] if isinstance(t, dict) else t for t in data.get("tags", [])}
+
+
+@step
 def batch(c: Ctx) -> None:
     """ingest_many SYNC (glob) → ASYNC job with live progress → wait_all."""
     ws = c.workspace()

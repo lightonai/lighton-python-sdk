@@ -24,7 +24,7 @@ from pydantic import Field
 
 from lighton._active_record import _ActiveRecord
 from lighton.content_type import Facet
-from lighton.enums import FileStatus
+from lighton.enums import FileStatus, ReprocessLevel
 from lighton.exceptions import LightOnError
 from lighton.tag import resolve_ids
 
@@ -72,6 +72,14 @@ class File(_ActiveRecord):
     )
     status_detail: str | None = Field(
         None, description="Free-text error detail, present only on failure (read-only)."
+    )
+    pending_reprocess: ReprocessLevel | None = Field(
+        None,
+        description=(
+            "Reprocessing queued but not started (read-only). While non-null, `status` "
+            "and the file-derived fields still describe the *previous* run; it clears "
+            "the moment processing starts. `update` means a file replacement."
+        ),
     )
     extension: str | None = Field(
         None, description="File extension of the document (read-only)."
@@ -177,6 +185,51 @@ class File(_ActiveRecord):
         return self._absorb(
             self._api("PATCH", f"{_BASE}/{self.id}", data={"title": self.title})
         )
+
+    def replace(
+        self, path: str | Path, *, wait: bool = False, timeout: float = 300.0
+    ) -> File:
+        """Replace this document's content in place (PATCH, multipart `file` part).
+
+        The document keeps its id, title, tags, and content-type classifications,
+        and is re-ingested from the new content, so every reference to the id
+        survives what used to need a delete plus a re-upload. The new file may be
+        of a different type. `filename` follows the new file, but `title` (the
+        user-facing name, what get_by_name matches) is preserved, so a replaced
+        document is still found under the name it was uploaded with.
+
+        Addressed by **id**, never by name: titles and filenames aren't unique, so
+        resolve to the one document you mean first (`File.get(client, id)`, or
+        check the length of `File.get_by_name(...)`) before replacing.
+
+        Args:
+            path: Local file whose content replaces the current one.
+            wait: If True, block until the re-ingestion reaches a terminal status.
+            timeout: Seconds to wait when wait=True before raising TimeoutError.
+
+        Returns:
+            `self`. Note the fields absorbed from the response still describe the
+            *previous* content (see below); refresh() once re-ingestion has run.
+
+        Raises:
+            ValueError: If this file has not been created/retrieved yet.
+            TimeoutError: If wait=True and `timeout` elapses.
+            LightOnError: If wait=True and the re-ingestion fails.
+        """
+        self.path = Path(path)
+        # Read into memory for the same reason create() does: a 429 retry resends
+        # the body, and a consumed handle would resend empty.
+        content = self.path.read_bytes()
+        self._absorb(
+            self._api(
+                "PATCH",
+                f"{_BASE}/{self.id}",
+                files={"file": (self.path.name, content)},
+            )
+        )
+        # The response reports `pending_reprocess: update` alongside the *previous*
+        # run's `status`, and wait() knows not to trust a status while that is set.
+        return self.wait(timeout) if wait else self
 
     def tag(self, tags: _list[Tag | int | str]) -> File:
         """Assign tags to this file (POST /files/<id>/tags).
@@ -303,18 +356,31 @@ class File(_ActiveRecord):
             timeout: Max seconds to wait before raising TimeoutError.
             poll: Seconds to sleep between status checks.
 
+        A pending reprocess counts as *not* terminal: while `pending_reprocess` is
+        set the queued work has not started and `status` still reports the previous
+        run, so trusting it would call a replace() done before it began.
+
         Returns:
-            `self`, once `status` is a terminal-success state (embedded/parsed).
+            `self`, once `status` is a terminal-success state (embedded/parsed)
+            and no reprocess is queued.
 
         Raises:
             TimeoutError: If `timeout` elapses before a terminal status.
             LightOnError: If ingestion ends in a terminal-failure state.
         """
         deadline = time.monotonic() + timeout
-        while self.status not in _TERMINAL_OK and self.status not in _TERMINAL_BAD:
+        while self.pending_reprocess is not None or (
+            self.status not in _TERMINAL_OK and self.status not in _TERMINAL_BAD
+        ):
             if time.monotonic() > deadline:
                 raise TimeoutError(
-                    f"file {self.id} still {self.status} after {timeout}s"
+                    f"file {self.id} still {self.status}"
+                    + (
+                        f" (reprocess {self.pending_reprocess} queued)"
+                        if self.pending_reprocess
+                        else ""
+                    )
+                    + f" after {timeout}s"
                 )
             time.sleep(poll)
             self.refresh()

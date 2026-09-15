@@ -143,6 +143,25 @@ response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
   unique the way stored filenames are (the same document uploaded twice shares one),
   so callers that need exactly one check the length. Empty on no match, the only
   `ValueError` is a workspace with no id.
+- **`replace(path, wait=False, timeout=300.0)`** swaps the document's content in
+  place: PATCH `/files/<id>` with the same multipart `file` part `create()` sends (read
+  into memory for the same 429-retry reason). The id, tags, and classifications survive,
+  which is the point, it used to take a delete plus a re-upload. Addressed by **id**
+  (an instance method), never by name: `get_by_name` returns a list precisely because
+  titles aren't unique, so the caller picks first. `filename` follows the new file
+  but `title` is preserved (verified live), so `get_by_name` still finds it. Same
+  `wait`/`timeout` pair as `Workspace.ingest`, no `poll` knob.
+- **`pending_reprocess` is a correctness requirement, not a nicety.** The API accepts a
+  reprocess (a replacement reports level `update`) and leaves `status` reporting the
+  **previous** run until the work actually starts, along with the file-derived fields
+  (`filename`/`size`/`total_pages`). Verified live: the PATCH response comes back
+  `{"status": "embedded", "pending_reprocess": "update"}`, and the field clears on the
+  first poll after processing starts. So **`wait()` treats a non-null
+  `pending_reprocess` as not-terminal**, which is what makes both `replace(wait=True)`
+  and a hand-written `f.replace(...); f.wait()` correct, rather than `replace` guessing
+  at a settle window. `ReprocessLevel` (enums.py, StrEnum, mirrors
+  `PendingReprocessEnum`) has a documented domain, so it gets enumerated per the enum
+  policy above.
 - **`tag()`/`untag()`** assign/remove tags post-upload; both accept `Tag` objects, ids,
   **or names** via `tag.resolve_ids(client, ...)`, names are resolved through a single
   `Tag.list()` and an unknown name raises `ValueError` (fail loud, not silent no-tag).

@@ -7,6 +7,7 @@ from lighton.content_type import Attribute, ContentType, Facet
 from lighton.enums import (
     ExecMode,
     FileStatus,
+    ReprocessLevel,
     JobStatus,
     RelevanceScoring,
     Role,
@@ -35,6 +36,7 @@ __all__ = [
     "FailedIngest",
     "File",
     "FileStatus",
+    "ReprocessLevel",
     "JobStatus",
     "LightOn",
     "LightOnConfiguration",

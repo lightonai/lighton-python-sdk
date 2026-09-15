@@ -12,6 +12,16 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+class ReprocessLevel(StrEnum):
+    """Reprocessing level queued on a File (`pending_reprocess`), `update` = replacement."""
+
+    reparse = "reparse"
+    rechunk = "rechunk"
+    reembed = "reembed"
+    reembed_vision = "reembed_vision"
+    update = "update"
+
+
 class FileStatus(StrEnum):
     """Ingestion pipeline status for a File."""
 
