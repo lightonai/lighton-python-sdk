@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -67,6 +68,39 @@ class ServerError(LightOnAPIError):
     """5xx, the API failed to handle the request."""
 
 
+class MaintenanceError(ServerError):
+    """503 during a planned maintenance window, not a crash.
+
+    A `ServerError` subclass, so existing `except ServerError` handlers keep
+    working; catch this specifically to tell "come back later" apart from "this
+    broke", since only one of the two is worth retrying.
+
+    `mode` is `full_shutdown` or `warning_banner` (both block the request),
+    `reason` is operator-supplied text, `started_at` is when the window opened,
+    and `endpoint_categories` names the affected categories, empty meaning every
+    endpoint. The untouched payload is always on `.body`.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int,
+        body: Any = None,
+        mode: str | None = None,
+        reason: str | None = None,
+        started_at: datetime | None = None,
+        endpoint_categories: list[str] | None = None,
+    ) -> None:
+        super().__init__(message, status_code=status_code, body=body)
+        self.mode = mode
+        self.reason = reason
+        self.started_at = started_at
+        self.endpoint_categories = endpoint_categories or []
+
+
+_MAINTENANCE = "service_maintenance"
+
 _STATUS_MAP = {
     401: AuthenticationError,
     403: PermissionDeniedError,
@@ -92,6 +126,16 @@ def from_response(response: httpx.Response) -> LightOnAPIError:
             body=body,
             retry_after=_retry_after(response),
         )
+    if isinstance(body, dict) and body.get("error") == _MAINTENANCE:
+        return MaintenanceError(
+            message,
+            status_code=response.status_code,
+            body=body,
+            mode=body.get("mode"),
+            reason=body.get("reason"),
+            started_at=_timestamp(body.get("started_at")),
+            endpoint_categories=body.get("endpoint_category_names"),
+        )
     return cls(message, status_code=response.status_code, body=body)
 
 
@@ -101,6 +145,16 @@ def _retry_after(response: httpx.Response) -> float | None:
     raw = response.headers.get("Retry-After")
     try:
         return float(raw) if raw is not None else None
+    except ValueError:
+        return None
+
+
+def _timestamp(raw: Any) -> datetime | None:
+    """Parse an ISO-8601 timestamp, or None. The raw value stays on `.body`."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw)
     except ValueError:
         return None
 

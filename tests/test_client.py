@@ -213,3 +213,83 @@ def test_raw_empty_body_is_empty_bytes_not_none():
     # The JSON path turns an empty 2xx into None; the bytes path must not.
     client = make_client(lambda req: httpx.Response(200, content=b""))
     assert client._request("GET", "/api/v3/files/7/download", raw=True) == b""
+
+
+# --- maintenance windows ----------------------------------------------------
+# A 503 from the maintenance middleware is worth retrying later; a 503 from a
+# crash is not. They arrive on the same status code, so the body tells them apart.
+
+_MAINTENANCE_BODY = {
+    "detail": "System is under maintenance.",
+    "error": "service_maintenance",
+    "mode": "full_shutdown",
+    "reason": "database migration",
+    "started_at": "2026-09-15T08:30:00Z",
+    "endpoint_category_names": ["search", "ingestion"],
+}
+
+
+def test_maintenance_503_raises_a_dedicated_error_with_its_fields():
+    client = make_client(lambda req: httpx.Response(503, json=_MAINTENANCE_BODY))
+
+    with pytest.raises(exc.MaintenanceError) as excinfo:
+        client.ask("q")
+
+    e = excinfo.value
+    assert e.mode == "full_shutdown"
+    assert e.reason == "database migration"
+    assert e.started_at is not None and e.started_at.year == 2026
+    assert e.endpoint_categories == ["search", "ingestion"]
+    assert e.status_code == 503
+    assert e.body == _MAINTENANCE_BODY  # the untouched payload is still there
+    assert "System is under maintenance." in str(e)
+
+
+def test_maintenance_error_is_still_a_server_error():
+    # Subclassing keeps existing `except ServerError` handlers working.
+    client = make_client(lambda req: httpx.Response(503, json=_MAINTENANCE_BODY))
+    with pytest.raises(exc.ServerError):
+        client.ask("q")
+    assert issubclass(exc.MaintenanceError, exc.ServerError)
+
+
+def test_a_plain_503_stays_a_server_error():
+    client = make_client(lambda req: httpx.Response(503, json={"detail": "boom"}))
+    with pytest.raises(exc.ServerError) as excinfo:
+        client.ask("q")
+    assert type(excinfo.value) is exc.ServerError, (
+        "a crash must not read as maintenance"
+    )
+
+
+def test_maintenance_survives_a_missing_or_unparsable_timestamp():
+    # reason/started_at are optional; a bad timestamp must not break the raise.
+    body = {"detail": "down", "error": "service_maintenance", "mode": "warning_banner"}
+    client = make_client(lambda req: httpx.Response(503, json=body))
+    with pytest.raises(exc.MaintenanceError) as excinfo:
+        client.ask("q")
+    assert excinfo.value.started_at is None
+    assert excinfo.value.reason is None
+    assert excinfo.value.endpoint_categories == []  # empty means every endpoint
+
+    client = make_client(
+        lambda req: httpx.Response(503, json={**body, "started_at": "not a date"})
+    )
+    with pytest.raises(exc.MaintenanceError) as excinfo:
+        client.ask("q")
+    assert excinfo.value.started_at is None
+    assert excinfo.value.body["started_at"] == "not a date"  # raw value preserved
+
+
+def test_maintenance_is_not_retried_like_a_429(monkeypatch):
+    # 5xx is deliberately not retried: the window outlasts any cooldown we'd wait.
+    monkeypatch.setattr(_client_mod.time, "sleep", lambda _s: None)
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(503, json=_MAINTENANCE_BODY)
+
+    with pytest.raises(exc.MaintenanceError):
+        make_client(handler, rate_limit_retries=3).ask("q")
+    assert calls["n"] == 1
