@@ -33,11 +33,16 @@ def _ids(items: Sequence[Any] | None) -> list[int] | None:
     return [_id(x) for x in items]
 
 
+def _path(item: str | Any) -> str:
+    """Coerce a ContentType or a path string to its path (duck-typed on `.path`)."""
+    return item if isinstance(item, str) else item.path
+
+
 def _paths(items: list[str] | list[Any] | None) -> list[str] | None:
     """Coerce a list of ContentType objects or path strings to paths (duck-typed on `.path`)."""
     if items is None:
         return None
-    return [x if isinstance(x, str) else x.path for x in items]
+    return [_path(x) for x in items]
 
 
 def _inline_refs(node: Any, defs: dict[str, Any]) -> Any:
