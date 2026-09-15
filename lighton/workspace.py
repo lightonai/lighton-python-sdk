@@ -13,12 +13,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, overload
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from lighton import batch
 from lighton._active_record import _ActiveRecord
 from lighton.batch import BatchIngest, BatchIngestJob
-from lighton.enums import ExecMode
+from lighton.enums import ExecMode, Role
+from lighton.types.workspace import WorkspaceSync, WorkspaceTaxonomy
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
@@ -53,6 +54,29 @@ class Workspace(_ActiveRecord):
     updated_at: datetime | None = Field(
         None, description="Last-update timestamp (read-only)."
     )
+    user_role: Role | None = Field(
+        None,
+        description="Your role on this workspace, owner/editor/viewer (read-only).",
+    )
+    taxonomy: WorkspaceTaxonomy | None = Field(
+        None,
+        description=(
+            "Classification coverage and per-root document counts (read-only). "
+            "Only `list()` returns it; the detail endpoint omits the key, so "
+            "`get()`/`refresh()` leave an already-loaded value in place."
+        ),
+    )
+    sync: WorkspaceSync | None = Field(
+        None,
+        description="External datasource this workspace imports from (read-only); "
+        "None when documents are uploaded directly.",
+    )
+
+    @field_validator("user_role", mode="before")
+    @classmethod
+    def _blank_role_is_none(cls, v: object) -> object:
+        """The API sends `""` for "no role"; that isn't a Role, so read it as None."""
+        return None if v == "" else v
 
     # --- instance lifecycle ------------------------------------------------
     def create(self, client: LightOn) -> Workspace:

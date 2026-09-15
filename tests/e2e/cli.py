@@ -164,6 +164,12 @@ def workspace(c: Ctx) -> None:
     assert any(w.id == ws.id for w in Workspace.list(c.client)), "missing from list()"
     assert Workspace.get(c.client, ws.id).name == ws.name, "get() name mismatch"
 
+    listed = next(w for w in Workspace.list(c.client) if w.id == ws.id)
+    assert listed.user_role is not None, "user_role is a free read off the listing"
+    _say(
+        f"user_role={listed.user_role}, sync={listed.sync and listed.sync.datasource_type}"
+    )
+
     ws.description = "renamed by e2e"
     ws.save()
     ws.refresh()
@@ -269,6 +275,24 @@ def content_types(c: Ctx) -> None:
     f.unclassify(ct)
     assert not any(x.path == ct.path for x in f.facets()), "unclassify() did not stick"
     _say("unclassify ok")
+
+    # Classification coverage shows up on the workspace listing, not on get().
+    f.classify(ct)
+    listed = next(w for w in Workspace.list(c.client) if w.id == c.workspace().id)
+    tax = listed.taxonomy
+    assert tax is not None, "taxonomy is None despite a classified file"
+    assert tax.classified_files_rate > 0, f"rate is {tax.classified_files_rate}"
+    assert any(r.path == ct.path.split(":")[0] for r in tax.root_content_types), (
+        f"{ct.path} missing from {[r.path for r in tax.root_content_types]}"
+    )
+    _say(
+        f"taxonomy: {tax.classified_files_rate:.0%} classified, roots "
+        f"{[(r.path, r.count) for r in tax.root_content_types]}"
+    )
+    before = listed.taxonomy
+    listed.refresh()  # detail endpoint omits the key, so it must survive
+    assert listed.taxonomy == before, "refresh() cleared a field it never receives"
+    _say("taxonomy survives refresh()")
 
     # Re-classify (mirrors the tags step's re-tag): facet_filters filters on this.
     f.classify(ct)

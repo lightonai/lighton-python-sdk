@@ -56,6 +56,17 @@ changes, `make gen-types` surfaces it and you update `enums.py` by hand. Only en
 a field whose full domain is known, `workspace_type`/`document_upload_method` stay
 `str` (plain `str` in the schema too, no documented value set).
 
+- **Workspace read-only extras.** `user_role` (the existing `Role` enum),
+  `taxonomy` (`WorkspaceTaxonomy` in `types/workspace.py`, with `RootContentType`)
+  and `sync` (`WorkspaceSync`) are free reads off the list payload. Two live-verified
+  quirks: `user_role` arrives as **`""`** when the caller holds no role, which isn't a
+  `Role` member, so a `mode="before"` validator maps blank to `None` rather than
+  widening the type; and **`taxonomy` is list-only**, the detail endpoint omits the
+  key entirely (not null), so `_absorb`'s "overwrite only what came back" rule means
+  `refresh()` preserves an already-loaded taxonomy instead of clearing it. A test
+  pins that, since it is exactly the kind of thing a future `_absorb` change would
+  silently break. `scoped_api_keys` is the one list field still unmodelled.
+
 ## Client
 
 - **Sync only.** `httpx.Client`. No async client until a real event-loop caller needs one, `_request` is the only logic to mirror.
