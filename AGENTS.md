@@ -93,7 +93,7 @@ a field whose full domain is known, `workspace_type`/`document_upload_method` st
   `{path: [Attribute]}` **map**, where a live node carries its own flat list. It
   lives in `content_type.py` next to `Attribute`/`Facet` (the local precedent for
   taxonomy-adjacent data models) rather than under `types/`.
-- Deferred: streaming, add the params when needed. **`POST /api/v3/preview`** (any supported document to PDF, sync, 20 MB cap) is deliberately **not** a verb: it's internal tooling, not SDK surface. `_request("POST", "/api/v3/preview", files=..., raw=True)` reaches it in one line if that ever changes, which is part of what the `raw` flag buys. Also unwrapped from the current OpenAPI schema: `POST /api/v3/content-types/scope` (`FacetScopeRequest`/`FacetScopeResponse`, LLM scope inference), `WorkspaceTaxonomy` on the workspace list response, and the `ServiceMaintenance503` body (a 503 maps to the generic error today, no dedicated exception).
+- Deferred: streaming, add the params when needed. **`POST /api/v3/preview`** (any supported document to PDF, sync, 20 MB cap) is deliberately **not** a verb: it's internal tooling, not SDK surface. `_request("POST", "/api/v3/preview", files=..., raw=True)` reaches it in one line if that ever changes, which is part of what the `raw` flag buys. Also unwrapped from the current OpenAPI schema: `POST /api/v3/content-types/scope` (`FacetScopeRequest`/`FacetScopeResponse`, LLM scope inference) and `scoped_api_keys` on the workspace responses.
 - **Config object.** Non-essential knobs (`base_url`, `timeout`, `retries`, `transport`) live in `LightOnConfiguration` (pydantic, `arbitrary_types_allowed`). `api_key` stays a direct `LightOn()` arg; falls back to `LIGHTON_API_KEY` env.
 - **Retries / rate limiting.** Two layers: `httpx.HTTPTransport(retries=)` handles
   *connection* errors (exp. backoff); `_request` itself handles **HTTP 429**, retries up to
@@ -119,9 +119,20 @@ key), `PermissionDeniedError` (403, authenticated but not allowed, e.g. an endpo
 needing CompanyAdmin; a **sibling** of `AuthenticationError`, not a subclass, so 401
 and 403 are caught separately), `NotFoundError` (404), `RateLimitError` (429, also carries `retry_after`, the
 `Retry-After` header in seconds via `_retry_after()`, or None; HTTP-date form not
-parsed), `ServerError` (5xx).
+parsed), `ServerError` (5xx), and `MaintenanceError`.
 `exceptions.from_response()` maps status → class. `MalformedResponseError`
 (sibling of `LightOnAPIError`, not a subclass), a 2xx body that isn't JSON.
+- **`MaintenanceError(ServerError)`** is the one mapping keyed on the **body**, not the
+  status: a 503 carrying `error: "service_maintenance"` (the schema's
+  `ServiceMaintenance503`). A planned window and a crash share status 503, and only one
+  of them is worth coming back for, so callers need to tell them apart. It **subclasses**
+  `ServerError` so existing `except ServerError` keeps working, and carries `mode`
+  (`full_shutdown`/`warning_banner`, both blocking), `reason`, `started_at` and
+  `endpoint_categories` (empty = every endpoint). `started_at` parses via `_timestamp()`
+  and is `None` if absent or unparsable, which loses nothing because the untouched
+  payload stays on `.body`. A 503 **without** the marker stays a plain `ServerError`
+  (pinned by a test). Still not retried: 5xx never is, and a maintenance window outlasts
+  any cooldown worth sleeping through.
 
 ## Resource management: active-record
 
