@@ -36,6 +36,7 @@ from lighton import (
     Attribute,
     AttributeType,
     ContentType,
+    DoneEvent,
     DownloadPurpose,
     ExecMode,
     ExternalMetadata,
@@ -44,7 +45,9 @@ from lighton import (
     RelevanceScoring,
     Role,
     SearchMode,
+    SourcesEvent,
     Tag,
+    TokenEvent,
     ThumbnailStatus,
     Workspace,
     wait_all,
@@ -480,6 +483,49 @@ def ask(c: Ctx) -> None:
     s = c.client.ask(query, workspaces=[c.workspace()], schema=GroundedAnswer)
     parsed = GroundedAnswer.model_validate_json(s.answer)  # raises if off-schema
     _say(f"structured: confident={parsed.confident} {parsed.answer[:120]}")
+
+
+@step
+def stream(c: Ctx) -> None:
+    """ask(stream=True): sources → tokens → done, and composed with schema=."""
+    ws = c.workspace()
+    query = c.ask_query or f"What does the document say about {_topic(c)}?"
+
+    sources, tokens, done = None, [], False
+    for event in c.client.ask(query, workspaces=[ws], max_results=5, stream=True):
+        if isinstance(event, SourcesEvent):
+            assert sources is None, "sources arrived more than once"
+            assert not tokens, "sources must arrive before any token"
+            sources = event.results
+        elif isinstance(event, TokenEvent):
+            tokens.append(event.text)
+        elif isinstance(event, DoneEvent):
+            done = True
+    assert done, "stream ended without a done event"
+    assert tokens, "stream produced no tokens"
+    answer = "".join(tokens)
+    _say(f"{len(sources or [])} source(s), {len(tokens)} token event(s): {answer[:90]}")
+
+    # The same items non-streaming ask returns, so a UI can show them right away.
+    assert sources, "no sources event"
+    assert sources[0].source.filename, "a source came back without a filename"
+
+    # stream + structured output compose: the tokens spell out the JSON.
+    text = "".join(
+        e.text
+        for e in c.client.ask(
+            query, workspaces=[ws], schema=GroundedAnswer, stream=True
+        )
+        if isinstance(e, TokenEvent)
+    )
+    parsed = GroundedAnswer.model_validate_json(text)  # raises if off-schema
+    _say(f"streamed structured output: confident={parsed.confident}")
+
+    # A generator: nothing is sent until iteration, and closing early is clean.
+    it = c.client.ask(query, workspaces=[ws], stream=True)
+    next(it)
+    it.close()
+    _say("early close released the stream cleanly")
 
 
 @step

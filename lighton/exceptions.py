@@ -20,6 +20,20 @@ class MalformedResponseError(LightOnError):
     """A 2xx response body was not valid JSON."""
 
 
+class StreamError(LightOnError):
+    """The server sent an `error` event partway through a stream.
+
+    Not a `LightOnAPIError`: the HTTP response was a perfectly good 200 and the
+    failure happened during generation, so there is no status code to carry. The
+    answer is incomplete, which is why this raises instead of arriving as one more
+    event a caller could mistake for a finished answer. `body` holds the payload.
+    """
+
+    def __init__(self, message: str, *, body: Any = None) -> None:
+        super().__init__(message)
+        self.body = body
+
+
 class LightOnAPIError(LightOnError):
     """The API returned a non-2xx response."""
 

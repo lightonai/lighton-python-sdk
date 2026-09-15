@@ -11,7 +11,7 @@ import os
 import random
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import httpx
@@ -130,6 +130,53 @@ class LightOn(AskMixin, SearchMixin, ParseMixin, ExtractMixin):
                         f"expected JSON but got: {response.text[:200]!r}"
                     ) from e
             error = exc.from_response(response)
+            if (
+                isinstance(error, exc.RateLimitError)
+                and attempt < self._rate_limit_retries
+            ):
+                time.sleep(_cooldown(error.retry_after, attempt))
+                continue
+            raise error
+        raise AssertionError("unreachable")  # loop either returns or raises
+
+    def _stream(self, method: str, path: str, **kwargs: Any) -> Iterator[str]:
+        """Send a request and yield the response body line by line, unparsed.
+
+        The streaming sibling of `_request`, for `text/event-stream` endpoints
+        whose body must not be read whole. It keeps the same guarantees: the rate
+        gate, JSON error mapping, and the 429 cooldown retry. It cannot be a flag
+        on `_request` the way `raw` is, because the response has to stay open for
+        the caller to consume, which inverts who controls the lifetime.
+
+        Being a generator, the request is sent on the **first iteration**, not when
+        this is called, so connection and HTTP errors surface there.
+
+        Args:
+            method: HTTP method.
+            path: Path under `base_url`.
+            **kwargs: Passed through to httpx (json/params/...).
+
+        Yields:
+            Body lines, newline-stripped.
+
+        Raises:
+            LightOnAPIError: Mapped from a non-2xx status, as in `_request`.
+            LightOnConnectionError: On transport failure, including mid-stream.
+        """
+        for attempt in range(self._rate_limit_retries + 1):
+            if self._gate is not None:
+                self._gate.acquire()
+            try:
+                with self._http.stream(method, path, **kwargs) as response:
+                    if response.is_success:
+                        yield from response.iter_lines()
+                        return
+                    # Error bodies are JSON even here; load it before mapping.
+                    response.read()
+                    error = exc.from_response(response)
+            except httpx.TransportError as e:
+                raise exc.LightOnConnectionError(str(e)) from e
+            # Raised outside the `with`, so the response is already closed.
             if (
                 isinstance(error, exc.RateLimitError)
                 and attempt < self._rate_limit_retries

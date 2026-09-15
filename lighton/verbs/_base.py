@@ -7,6 +7,7 @@ in isolation.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 
@@ -14,4 +15,7 @@ class _VerbClient:
     def _request(
         self, method: str, path: str, *, raw: bool = False, **kwargs: Any
     ) -> Any:
+        raise NotImplementedError  # provided by LightOn
+
+    def _stream(self, method: str, path: str, **kwargs: Any) -> Iterator[str]:
         raise NotImplementedError  # provided by LightOn

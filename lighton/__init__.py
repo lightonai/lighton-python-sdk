@@ -19,6 +19,12 @@ from lighton.enums import (
 from lighton.file import File, wait_all
 from lighton.job import ExtractJob, ParseJob
 from lighton.tag import Tag
+from lighton.types.events import (
+    AskEvent,
+    DoneEvent,
+    SourcesEvent,
+    TokenEvent,
+)
 from lighton.types import (
     ExternalMetadata,
     LightOnConfiguration,
@@ -35,12 +41,14 @@ __version__ = version(
 __all__ = [
     "ApiKey",
     "ApiKeyScope",
+    "AskEvent",
     "Attribute",
     "AttributeType",
     "BatchIngest",
     "BatchIngestJob",
     "BatchProgress",
     "ContentType",
+    "DoneEvent",
     "DownloadPurpose",
     "ExecMode",
     "ExternalMetadata",
@@ -58,9 +66,11 @@ __all__ = [
     "Role",
     "RootContentType",
     "SearchMode",
+    "SourcesEvent",
     "Tag",
     "Template",
     "Thumbnail",
+    "TokenEvent",
     "ThumbnailStatus",
     "Workspace",
     "WorkspaceSync",
