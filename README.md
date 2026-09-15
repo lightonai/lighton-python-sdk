@@ -182,6 +182,43 @@ print(revenue.amount, revenue.currency)
 print(resp.results)             # sources still come back alongside
 ```
 
+Pass `stream=True` for anything user-facing: you get Server-Sent Events instead of
+one blocking call, so the answer appears as it generates rather than after it.
+
+```python
+from lighton import DoneEvent, SourcesEvent, TokenEvent
+
+for event in client.ask("What were Q4 revenues?", workspaces=[42], stream=True):
+    if isinstance(event, SourcesEvent):
+        print("grounded in", len(event.results), "chunks")   # arrives first
+    elif isinstance(event, TokenEvent):
+        print(event.text, end="", flush=True)                # the answer, as it lands
+    elif isinstance(event, DoneEvent):
+        print()
+```
+
+`SourcesEvent.results` holds exactly what non-streaming `ask` returns, so you can
+show sources immediately and let the text fill in. Switching on `event.type`
+(`"sources"`, `"token"`, `"done"`) works too, if that reads better than `isinstance`.
+
+Streaming composes with `schema=`: the tokens spell out the JSON, so join them and
+parse at the end.
+
+```python
+text = "".join(
+    e.text
+    for e in client.ask("What were Q4 revenues?", workspaces=[42], schema=Revenue, stream=True)
+    if isinstance(e, TokenEvent)
+)
+revenue = Revenue.model_validate_json(text)
+```
+
+Two things to know. It's a **generator**, so nothing is sent until you start
+iterating, and a bad request surfaces on the first step rather than at the call;
+iterate it fully or `.close()` it so the connection is released. And if generation
+fails partway, you get a `StreamError` rather than a silently short answer, because
+a truncated answer that looks finished is the worse failure.
+
 ### `search`: retrieval only, no generation
 
 Hybrid semantic + lexical retrieval that returns ranked chunks with scores, source

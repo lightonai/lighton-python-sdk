@@ -93,7 +93,26 @@ a field whose full domain is known, `workspace_type`/`document_upload_method` st
   `{path: [Attribute]}` **map**, where a live node carries its own flat list. It
   lives in `content_type.py` next to `Attribute`/`Facet` (the local precedent for
   taxonomy-adjacent data models) rather than under `types/`.
-- Deferred: streaming, add the params when needed. **`POST /api/v3/preview`** (any supported document to PDF, sync, 20 MB cap) is deliberately **not** a verb: it's internal tooling, not SDK surface. `_request("POST", "/api/v3/preview", files=..., raw=True)` reaches it in one line if that ever changes, which is part of what the `raw` flag buys. Also unwrapped from the current OpenAPI schema: `POST /api/v3/content-types/scope` (`FacetScopeRequest`/`FacetScopeResponse`, LLM scope inference) and `scoped_api_keys` on the workspace responses.
+- **Streaming `ask`.** `stream=True` returns `Iterator[AskEvent]` via two more
+  `@overload`s keyed on `Literal[True/False]` (same trick as `ExecMode`), so callers
+  get `AskResponse` or the iterator, never the union. It **composes with `schema`**:
+  both are just body fields, and the tokens then spell out the JSON, which the docs
+  and a test both show. Pieces: `_client._stream()` is the streaming sibling of
+  `_request`, keeping the rate gate, JSON error mapping and the 429 cooldown, and it
+  **cannot** be a `_request` flag the way `raw` is, because the response must stay
+  open for the caller, inverting who owns its lifetime. `_sse()` in `verbs/ask.py`
+  parses the wire format (verified live: `event:`/`data:`/blank-line, plus `:`
+  heartbeat comments); it lives with its only caller until a second endpoint streams.
+  Events are pure-data models in `types/events.py` with a `type` literal
+  discriminator, so `isinstance` and `event.type` both work, and `SourcesEvent.results`
+  reuses the **same `AskResultItem`** non-streaming `ask` returns. Two deliberate
+  calls: an **`error` event raises `StreamError`** (a `LightOnError`, *not* a
+  `LightOnAPIError`, since HTTP was a clean 200) rather than arriving as an event a
+  caller could mistake for a finished answer; and an **unknown event name is skipped**,
+  so a new server event can't break existing callers. Being a generator, the request
+  goes out on first iteration, so errors surface there, which the docstring and README
+  both state.
+- Deferred: an async client, add it when a real event-loop caller needs one. **`POST /api/v3/preview`** (any supported document to PDF, sync, 20 MB cap) is deliberately **not** a verb: it's internal tooling, not SDK surface. `_request("POST", "/api/v3/preview", files=..., raw=True)` reaches it in one line if that ever changes, which is part of what the `raw` flag buys. Also unwrapped from the current OpenAPI schema: `POST /api/v3/content-types/scope` (`FacetScopeRequest`/`FacetScopeResponse`, LLM scope inference) and `scoped_api_keys` on the workspace responses.
 - **Config object.** Non-essential knobs (`base_url`, `timeout`, `retries`, `transport`) live in `LightOnConfiguration` (pydantic, `arbitrary_types_allowed`). `api_key` stays a direct `LightOn()` arg; falls back to `LIGHTON_API_KEY` env.
 - **Retries / rate limiting.** Two layers: `httpx.HTTPTransport(retries=)` handles
   *connection* errors (exp. backoff); `_request` itself handles **HTTP 429**, retries up to
