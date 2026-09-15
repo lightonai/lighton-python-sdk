@@ -95,6 +95,9 @@ class Ctx:
     ws: Workspace | None = None
     file: File | None = None
     tag: Tag | None = None
+    content_type: ContentType | None = None  # the file stays classified as this
+    other_content_type: ContentType | None = None  # a leaf it is NOT classified as
+    attribute_filter: str | None = None  # an `attribute=` entry that should match
     topic: str | None = None  # derived once by _topic(), cached here
     cleanup: list[Callable[[], object]] = field(default_factory=list)
 
@@ -209,7 +212,7 @@ def tags(c: Ctx) -> None:
 def content_types(c: Ctx) -> None:
     """list taxonomy → classify → set/clear attribute → facets → unclassify."""
     f = c.uploaded()
-    roots = ContentType.list(c.client, include_attributes=True)
+    roots = ContentType.list(c.client, include_attributes=True) or _seed_taxonomy(c)
     if not roots:
         _say("no content types configured on this tenant, nothing to classify")
         return
@@ -234,6 +237,58 @@ def content_types(c: Ctx) -> None:
     assert not any(x.path == ct.path for x in f.facets()), "unclassify() did not stick"
     _say("unclassify ok")
 
+    # Re-classify (mirrors the tags step's re-tag): facet_filters filters on this.
+    f.classify(ct)
+    c.content_type = ct
+    c.other_content_type = next((x for x in _leaves(roots) if x.path != ct.path), None)
+    if attr is not None:
+        value = _sample(attr)
+        f.set_attribute(ct, attr.name, value)
+        # `name:value` for a plain string, else the type-agnostic "has any value" form.
+        c.attribute_filter = (
+            f"{attr.name}:{value}" if isinstance(value, str) else attr.name
+        )
+        _say(f"left attribute filter {c.attribute_filter!r} on the file")
+
+
+def _seed_taxonomy(c: Ctx) -> list[ContentType]:
+    """Define two throwaway content types so an empty tenant still exercises facets.
+
+    ponytail: the SDK models the taxonomy read-only (`ContentType.list`), so this
+    reaches for `client._request` rather than growing a write API nobody asked for.
+    Wrap the write verbs here if the SDK ever exposes them.
+    """
+    code = f"e2e-{c.stamp}"  # codes are lowercase alphanumeric + hyphens, server-side
+    for suffix in ("", "-other"):
+        c.client._request(
+            "POST",
+            "/api/v3/content-types",
+            json={
+                "action": "define_content_type",
+                "code": code + suffix,
+                "label": f"E2E {c.stamp}{suffix}",
+            },
+        )
+        c.cleanup.append(
+            lambda path=code + suffix: c.client._request(
+                "POST",
+                "/api/v3/content-types",
+                json={"action": "undefine_content_type", "content_type_path": path},
+            )
+        )
+    c.client._request(
+        "POST",
+        "/api/v3/content-types",
+        json={
+            "action": "define_attribute",
+            "content_type_path": code,
+            "name": "e2e_marker",
+            "attribute_type": "text",
+        },
+    )
+    _say(f"seeded content types {code} / {code}-other with a text attribute")
+    return ContentType.list(c.client, include_attributes=True)
+
 
 def _leaves(nodes: list[ContentType]) -> Iterator[ContentType]:
     for n in nodes:
@@ -255,6 +310,58 @@ def _sample(attr: Attribute) -> object:
             return attr.choices[0] if attr.type == "select" else [attr.choices[0]]
         case _:
             return None
+
+
+@step
+def facet_filters(c: Ctx) -> None:
+    """content_type= / attribute= on search and ask (needs the content_types step)."""
+    ws = c.workspace()
+    ct = c.content_type
+    if ct is None:
+        _say("nothing classified — run with --only content_types --only facet_filters")
+        return
+    query = c.search_query or _topic(c)
+
+    # ContentType object, not just a path: the SDK coerces it via `.path`.
+    hits = c.client.search(
+        query, workspaces=[ws], content_type=[ct], max_results=5
+    ).results
+    assert hits, (
+        f"content_type={ct.path!r} returned nothing, but the file is classified as it"
+    )
+    _say(f"search content_type={ct.path!r} → {len(hits)} chunk(s)")
+
+    # A leaf the file is NOT classified as must filter it out, otherwise the
+    # filter never reached the server.
+    if c.other_content_type is not None:
+        other = c.other_content_type.path
+        assert not c.client.search(
+            query, workspaces=[ws], content_type=[other], max_results=5
+        ).results, f"content_type={other!r} still returned chunks — filter ignored?"
+        _say(f"search content_type={other!r} → 0 chunk(s), as expected")
+
+    if c.attribute_filter:
+        got = c.client.search(
+            query, workspaces=[ws], attribute=[c.attribute_filter], max_results=5
+        ).results
+        assert got, f"attribute={c.attribute_filter!r} returned nothing"
+        _say(f"search attribute={c.attribute_filter!r} → {len(got)} chunk(s)")
+
+        miss = f"{c.attribute_filter.split(':')[0]}:e2e-no-such-value"
+        assert not c.client.search(
+            query, workspaces=[ws], attribute=[miss], max_results=5
+        ).results, f"attribute={miss!r} still returned chunks — filter ignored?"
+        _say(f"search attribute={miss!r} → 0 chunk(s), as expected")
+
+    r = c.client.ask(
+        query,
+        workspaces=[ws],
+        content_type=[ct.path],
+        attribute=[c.attribute_filter] if c.attribute_filter else None,
+        max_results=5,
+    )
+    assert r.results, "ask with facet filters grounded on nothing"
+    _say(f"ask with facet filters → {len(r.results)} source chunk(s)")
 
 
 @step

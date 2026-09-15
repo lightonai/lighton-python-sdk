@@ -9,19 +9,19 @@ from pydantic import BaseModel
 from lighton.enums import RelevanceScoring
 from lighton.tag import resolve_ids
 from lighton.types.api import AskResponse
-from lighton.utils import _compact, _ids, as_json_schema
+from lighton.utils import _compact, _ids, _paths, as_json_schema
 from lighton.verbs._base import _VerbClient
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
+    from lighton.content_type import ContentType
     from lighton.file import File
     from lighton.tag import Tag
     from lighton.workspace import Workspace
 
 
 class AskMixin(_VerbClient):
-    # ponytail: content_type and attribute filters are deferred, add the
-    # content_type/attribute params (and streaming/async) when needed.
+    # ponytail: streaming/async are deferred, add them when needed.
     def ask(
         self,
         query: str,
@@ -29,6 +29,8 @@ class AskMixin(_VerbClient):
         workspaces: list[Workspace | int] | None = None,
         tags: list[Tag | int | str] | None = None,
         files: list[File | int] | None = None,
+        content_type: list[ContentType | str] | None = None,
+        attribute: list[str] | None = None,
         max_results: int | None = None,
         relevance_scoring: RelevanceScoring | None = None,
         model: str | None = None,
@@ -45,6 +47,13 @@ class AskMixin(_VerbClient):
                 must exist. Excludes files.
             files: Restrict to these files (File objects or ids). Excludes
                 workspaces and tags.
+            content_type: Restrict to these content-type paths, ContentType objects
+                or path strings (OR-matched, exact-or-subtree, e.g. "legal" also
+                matches "legal:contract"; wildcards `legal:contract*`, `*nda*`).
+            attribute: Restrict by attribute value, e.g.
+                `["fiscal_year:2024|2025", "status:active"]`. Entries are ANDed,
+                `|` ORs within one entry. Also `name` (has any value),
+                `name:>value`, `name:prefix*`, `name:*text*`.
             max_results: Chunks to retrieve for context (1–50; server default 10).
             relevance_scoring: RelevanceScoring, .scoring_and_filtering (default),
                 .scoring_only, or .none.
@@ -64,6 +73,8 @@ class AskMixin(_VerbClient):
             workspace_id=_ids(workspaces),
             tag_id=tag_ids,
             file_id=_ids(files),
+            content_type=_paths(content_type),
+            attribute=attribute,
             max_results=max_results,
             relevance_scoring=relevance_scoring,
             model=model,
