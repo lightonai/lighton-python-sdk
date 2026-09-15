@@ -55,3 +55,26 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/*
           --title "$GITHUB_REF_NAME"
           --notes-file notes.md
+
+      - name: Announce on Slack
+        env:
+          WEBHOOK: ${{ secrets.RELEASE_SLACK_WEBHOOK_URL }}
+          RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::RELEASE_SLACK_WEBHOOK_URL is not set, skipping the announcement"
+            exit 0
+          fi
+          # Escape Slack's entities first (& < > are markup to it, so an unescaped
+          # "<SDK>" in a commit message would vanish), then markdown -> mrkdwn,
+          # which renders neither "### x" nor "**bold**". Truncated well under
+          # Slack's 40k text limit; the link carries the full notes either way.
+          body=$(sed -e 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' notes.md \
+               | sed -E 's/^#+ +(.*)$/*\1*/; s/\*\*([^*]+)\*\*/*\1*/g' \
+               | head -c 3500)
+          jq -n --arg tag "$GITHUB_REF_NAME" --arg url "$RELEASE_URL" \
+                --arg repo "$GITHUB_REPOSITORY" --arg body "$body" \
+             '{text: ("*\($repo) \($tag)* released\n<\($url)|Release notes> · `uv add lighton-sdk`\n\n\($body)")}' \
+             > slack.json
+          curl -sS --fail-with-body -X POST -H 'Content-Type: application/json' \
+               --data @slack.json "$WEBHOOK"
