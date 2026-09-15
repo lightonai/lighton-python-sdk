@@ -6,6 +6,7 @@ from lighton.batch import BatchIngest, BatchIngestJob, BatchProgress, FailedInge
 from lighton.content_type import Attribute, ContentType, Facet, Template
 from lighton.enums import (
     AttributeType,
+    DownloadPurpose,
     ExecMode,
     FileStatus,
     JobStatus,
@@ -13,11 +14,12 @@ from lighton.enums import (
     ReprocessLevel,
     Role,
     SearchMode,
+    ThumbnailStatus,
 )
 from lighton.file import File, wait_all
 from lighton.job import ExtractJob, ParseJob
 from lighton.tag import Tag
-from lighton.types import ExternalMetadata, LightOnConfiguration
+from lighton.types import ExternalMetadata, LightOnConfiguration, Thumbnail
 from lighton.workspace import Workspace
 
 __version__ = version(
@@ -32,6 +34,7 @@ __all__ = [
     "BatchIngestJob",
     "BatchProgress",
     "ContentType",
+    "DownloadPurpose",
     "ExecMode",
     "ExternalMetadata",
     "ExtractJob",
@@ -49,6 +52,8 @@ __all__ = [
     "SearchMode",
     "Tag",
     "Template",
+    "Thumbnail",
+    "ThumbnailStatus",
     "Workspace",
     "wait_all",
 ]

@@ -160,3 +160,56 @@ def test_rate_gate_paces_requests():
     now["t"] = 0.1  # 0.1s elapsed, but the interval is 1.0s
     gate.acquire()
     assert slept[-1] == pytest.approx(0.9, abs=0.01)
+
+
+# --- raw (binary) responses -------------------------------------------------
+# The download/thumbnail endpoints serve files, not JSON. They stay on the
+# one _request so auth, error mapping, the 429 cooldown and the rate gate are
+# shared; `raw` only skips the JSON parse.
+
+
+def test_raw_returns_bytes_without_parsing_json():
+    png = b"\x89PNG\r\n\x1a\n not json at all"
+    client = make_client(lambda req: httpx.Response(200, content=png))
+
+    got = client._request("GET", "/api/v3/files/7/download", raw=True)
+
+    assert got == png
+    assert isinstance(got, bytes)
+
+
+def test_raw_would_have_raised_without_the_flag():
+    # Same body, parsed: the guarantee is that `raw` is what makes it work.
+    client = make_client(lambda req: httpx.Response(200, content=b"%PDF-1.7 binary"))
+    with pytest.raises(exc.MalformedResponseError):
+        client._request("GET", "/api/v3/files/7/download")
+
+
+def test_raw_still_maps_errors_to_exceptions():
+    # Errors stay JSON even on a binary endpoint, and must still raise.
+    client = make_client(
+        lambda req: httpx.Response(404, json={"detail": "No thumbnail available"})
+    )
+    with pytest.raises(exc.NotFoundError):
+        client._request("GET", "/api/v3/files/7/thumbnail", raw=True)
+
+
+def test_raw_still_retries_a_429(monkeypatch):
+    monkeypatch.setattr(_client_mod.time, "sleep", lambda _s: None)
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, json={"detail": "slow down"})
+        return httpx.Response(200, content=b"%PDF-")
+
+    client = make_client(handler, rate_limit_retries=2)
+    assert client._request("GET", "/api/v3/files/7/download", raw=True) == b"%PDF-"
+    assert calls["n"] == 2, "the cooldown retry must cover binary endpoints too"
+
+
+def test_raw_empty_body_is_empty_bytes_not_none():
+    # The JSON path turns an empty 2xx into None; the bytes path must not.
+    client = make_client(lambda req: httpx.Response(200, content=b""))
+    assert client._request("GET", "/api/v3/files/7/download", raw=True) == b""

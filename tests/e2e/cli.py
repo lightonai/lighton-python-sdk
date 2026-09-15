@@ -36,6 +36,7 @@ from lighton import (
     Attribute,
     AttributeType,
     ContentType,
+    DownloadPurpose,
     ExecMode,
     ExternalMetadata,
     File,
@@ -44,9 +45,11 @@ from lighton import (
     Role,
     SearchMode,
     Tag,
+    ThumbnailStatus,
     Workspace,
     wait_all,
 )
+from lighton.exceptions import NotFoundError
 
 DOCS_DIR = Path(__file__).parent / "documents"
 JOB_TIMEOUT = 300.0
@@ -499,6 +502,45 @@ def extract(c: Ctx) -> None:
     by_id = c.client.extract(DocumentSummary, file=c.uploaded())
     assert by_id.result and by_id.result.data, "extract by file_id returned no data"
     _say(f"by file_id {c.uploaded().id}: {by_id.result.data}")
+
+
+@step
+def binary(c: Ctx) -> None:
+    """download (each purpose) → pages() vs parse() → thumbnail status gate."""
+    f = c.uploaded()
+    doc = c.docs[0]
+
+    original = f.download()
+    assert original == doc.read_bytes(), "download() did not return the bytes we sent"
+    _say(f"download original: {len(original)} bytes, byte-identical to the upload")
+
+    for purpose in (DownloadPurpose.rendered_pdf, DownloadPurpose.transcript):
+        got = f.download(purpose)
+        assert got, f"download({purpose}) returned nothing"
+        _say(f"download {purpose}: {len(got)} bytes")
+
+    pages = f.pages()
+    assert pages, "pages() returned nothing for an embedded document"
+    assert pages[0].markdown, "first page has no markdown"
+    parsed = c.client.parse(path=doc).result.pages
+    assert type(pages[0]) is type(parsed[0]), "pages() and parse() must share Page"
+    assert len(pages) == len(parsed), f"pages(): {len(pages)}, parse(): {len(parsed)}"
+    _say(f"pages(): {len(pages)} page(s), same Page model and count as parse()")
+
+    # Thumbnails are generated independently of ingestion, so READY is not a given.
+    f.refresh()
+    status = f.thumbnail.status if f.thumbnail else None
+    if status is ThumbnailStatus.READY:
+        image = f.download_thumbnail()
+        assert image, "thumbnail READY but the fetch returned nothing"
+        _say(f"thumbnail READY: {len(image)} bytes")
+    else:
+        try:
+            f.download_thumbnail()
+        except NotFoundError:
+            _say(f"thumbnail {status}: fetch raises NotFoundError, as documented")
+        else:
+            raise AssertionError(f"thumbnail is {status} but the fetch succeeded")
 
 
 @step

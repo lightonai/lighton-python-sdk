@@ -10,6 +10,7 @@ import json
 from urllib.parse import parse_qs
 
 from lighton import (
+    DownloadPurpose,
     ExternalMetadata,
     File,
     FileStatus,
@@ -17,8 +18,11 @@ from lighton import (
     LightOnConfiguration,
     ReprocessLevel,
     Tag,
+    ThumbnailStatus,
     Workspace,
 )
+from lighton.exceptions import NotFoundError
+from lighton.types.api import Page
 
 
 def _make_client(handler):
@@ -742,3 +746,110 @@ def test_save_keeps_a_null_inside_additional_metadata():
     assert json.loads(sent["form"]["external_metadata"][0]) == {
         "additional_metadata": {"version": None}
     }
+
+
+def test_download_sends_the_purpose_and_returns_bytes():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/download"):
+            seen["path"] = request.url.path
+            seen["purpose"] = request.url.params.get("purpose")
+            return httpx.Response(200, content=b"%PDF-1.7 bytes")
+        return httpx.Response(200, json={"id": 7})
+
+    f = File.get(_make_client(handler), 7)
+
+    assert f.download() == b"%PDF-1.7 bytes"
+    assert seen["path"] == "/api/v3/files/7/download"
+    assert seen["purpose"] == "original"  # the default
+
+    f.download(DownloadPurpose.rendered_pdf)
+    assert seen["purpose"] == "rendered_pdf"
+
+
+def test_thumbnail_field_parses_and_gates_the_fetch():
+    # Generation is independent of ingestion, so an embedded file may have none.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/thumbnail"):
+            return httpx.Response(404, json={"detail": "No thumbnail available"})
+        return httpx.Response(
+            200,
+            json={
+                "id": 7,
+                "status": "embedded",
+                "thumbnail": {"status": "MISSING", "url": None},
+            },
+        )
+
+    f = File.get(_make_client(handler), 7)
+    assert f.thumbnail is not None
+    assert f.thumbnail.status is ThumbnailStatus.MISSING
+    assert f.thumbnail.url is None
+
+    with pytest.raises(NotFoundError):
+        f.download_thumbnail()
+
+
+def test_download_thumbnail_returns_the_image_when_ready():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/thumbnail"):
+            assert request.url.path == "/api/v3/files/7/thumbnail"
+            return httpx.Response(200, content=b"RIFF....WEBP")
+        return httpx.Response(
+            200,
+            json={"id": 7, "thumbnail": {"status": "READY", "url": "/thumbs/7.webp"}},
+        )
+
+    f = File.get(_make_client(handler), 7)
+    assert f.thumbnail is not None and f.thumbnail.status is ThumbnailStatus.READY
+    assert f.download_thumbnail() == b"RIFF....WEBP"
+
+
+def test_download_needs_an_id():
+    with pytest.raises(ValueError, match="created or retrieved"):
+        File().download()
+
+
+def test_pages_asks_for_content_and_parses_the_page_shape():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.setdefault("calls", []).append(dict(request.url.params))
+        return httpx.Response(
+            200,
+            json={
+                "id": 7,
+                "pages": [
+                    {"index": 1, "markdown": "# Title\n\nBody"},
+                    {"index": 2, "markdown": "## Next"},
+                ],
+            },
+        )
+
+    f = File.get(_make_client(handler), 7)
+    pages = f.pages()
+
+    # refresh()/get() must stay cheap: content is opt-in, one request only.
+    assert seen["calls"] == [{}, {"include_content": "true"}]
+    assert [p.index for p in pages] == [1, 2]
+    assert pages[0].markdown == "# Title\n\nBody"
+    assert isinstance(pages[0], Page)  # the same model parse() returns
+
+
+def test_pages_is_empty_when_the_document_has_no_stored_text():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 7, "pages": None})
+
+    assert File.get(_make_client(handler), 7).pages() == []
+
+
+def test_pages_does_not_become_a_model_field():
+    # Text can be large; it must not ride along on every refresh().
+    assert "pages" not in File.model_fields
+    assert "content" not in File.model_fields  # and `content` is deprecated API-side
+
+
+def test_pages_needs_an_id():
+    with pytest.raises(ValueError, match="created or retrieved"):
+        File().pages()

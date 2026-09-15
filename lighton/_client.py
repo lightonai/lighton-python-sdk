@@ -92,13 +92,24 @@ class LightOn(AskMixin, SearchMixin, ParseMixin, ExtractMixin):
         self._http.close()
 
     # --- transport ---------------------------------------------------------
-    def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+    def _request(
+        self, method: str, path: str, *, raw: bool = False, **kwargs: Any
+    ) -> Any:
         """Send a request, raise on error, return parsed JSON (or None for empty 2xx).
 
         Paces requests under the configured per-minute cap and, on HTTP 429, waits
         the Retry-After cooldown (or exponential backoff) and retries up to
         `rate_limit_retries` times. All callers route through here, so both the cap
         and the cooldown apply to every endpoint uniformly.
+
+        Args:
+            method: HTTP method.
+            path: Path under `base_url`, carrying the full `/api/v3/...`.
+            raw: Return the raw body as `bytes` instead of parsing JSON, for the
+                endpoints that serve a file (download/thumbnail). Errors
+                are still JSON and still mapped to exceptions, which is the whole
+                reason this is a flag here rather than a second helper.
+            **kwargs: Passed through to httpx (json/data/files/params).
         """
         for attempt in range(self._rate_limit_retries + 1):
             if self._gate is not None:
@@ -108,6 +119,8 @@ class LightOn(AskMixin, SearchMixin, ParseMixin, ExtractMixin):
             except httpx.TransportError as e:
                 raise exc.LightOnConnectionError(str(e)) from e
             if response.is_success:
+                if raw:
+                    return response.content
                 if not response.content:
                     return None
                 try:

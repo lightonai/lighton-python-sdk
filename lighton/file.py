@@ -25,10 +25,11 @@ from pydantic import Field
 
 from lighton._active_record import _ActiveRecord
 from lighton.content_type import Facet
-from lighton.enums import FileStatus, ReprocessLevel
+from lighton.enums import DownloadPurpose, FileStatus, ReprocessLevel
 from lighton.exceptions import LightOnError
 from lighton.tag import resolve_ids
-from lighton.types.file import ExternalMetadata
+from lighton.types.api import Page
+from lighton.types.file import ExternalMetadata, Thumbnail
 from lighton.utils import _compact, _ids, _path
 
 if TYPE_CHECKING:
@@ -98,6 +99,13 @@ class File(_ActiveRecord):
         None, description="Total page count of the document (read-only)."
     )
     size: int | None = Field(None, description="File size in bytes (read-only).")
+    thumbnail: Thumbnail | None = Field(
+        None,
+        description=(
+            "Thumbnail status and URL (read-only). Check `status` is READY before "
+            "calling download_thumbnail(), which 404s otherwise."
+        ),
+    )
     created_at: datetime | None = Field(
         None, description="Creation timestamp (read-only)."
     )
@@ -340,6 +348,72 @@ class File(_ActiveRecord):
         # The response reports `pending_reprocess: update` alongside the *previous*
         # run's `status`, and wait() knows not to trust a status while that is set.
         return self.wait(timeout) if wait else self
+
+    # --- binary content ----------------------------------------------------
+    def download(
+        self, purpose: DownloadPurpose | str = DownloadPurpose.original
+    ) -> bytes:
+        """Download this document's stored bytes (GET /files/<id>/download).
+
+        Args:
+            purpose: Which stored version to fetch, `original` (default), the
+                `rendered_pdf`, or the `transcript`. The server falls back to
+                `original` when the requested purpose has no associated file, so
+                this never 404s just because a rendition is missing.
+
+        Returns:
+            The file content, as bytes. Write it yourself:
+            `Path("out.pdf").write_bytes(doc.download())`.
+
+        Raises:
+            ValueError: If this file has not been created/retrieved yet.
+        """
+        return self._api(
+            "GET", f"{_BASE}/{self.id}/download", params={"purpose": purpose}, raw=True
+        )
+
+    def pages(self) -> _list[Page]:
+        """Fetch the parsed text of this document, one entry per page.
+
+        The platform stores what it parsed at ingestion, so this reads it back
+        instead of re-uploading and re-parsing a document it already has. The
+        result is the **same** `{index, markdown}` shape `parse` returns
+        (literally the same `Page` model), so code can move between parsing a
+        local file and reading an ingested one without reshaping anything.
+
+        Costs a request with `include_content=true` and is not part of
+        `refresh()`, because the text can be large and most callers don't want it.
+
+        Returns:
+            One Page per page, `index` and `markdown`. Empty if the document has
+            no stored text. A document ingested before per-page text was stored
+            comes back as a single page (index 1).
+
+        Raises:
+            ValueError: If this file has not been created/retrieved yet.
+        """
+        data = self._api("GET", f"{_BASE}/{self.id}", params={"include_content": True})
+        return [Page.model_validate(p) for p in data.get("pages") or []]
+
+    def download_thumbnail(self) -> bytes:
+        """Download this document's 256x256 WebP thumbnail.
+
+        Generated asynchronously and **independently of ingestion**, so an embedded
+        file may still have none. Check the `thumbnail` field first, a fetch before
+        it is READY raises `NotFoundError`:
+
+            doc.refresh()
+            if doc.thumbnail and doc.thumbnail.status is ThumbnailStatus.READY:
+                image = doc.download_thumbnail()
+
+        Returns:
+            The WebP image, as bytes.
+
+        Raises:
+            ValueError: If this file has not been created/retrieved yet.
+            NotFoundError: If no thumbnail exists (status is not READY).
+        """
+        return self._api("GET", f"{_BASE}/{self.id}/thumbnail", raw=True)
 
     def tag(self, tags: _list[Tag | int | str]) -> File:
         """Assign tags to this file (POST /files/<id>/tags).

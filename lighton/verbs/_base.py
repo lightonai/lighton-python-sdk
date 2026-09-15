@@ -11,5 +11,7 @@ from typing import Any
 
 
 class _VerbClient:
-    def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+    def _request(
+        self, method: str, path: str, *, raw: bool = False, **kwargs: Any
+    ) -> Any:
         raise NotImplementedError  # provided by LightOn
