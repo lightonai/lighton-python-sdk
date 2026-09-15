@@ -29,7 +29,7 @@ from lighton.enums import FileStatus, ReprocessLevel
 from lighton.exceptions import LightOnError
 from lighton.tag import resolve_ids
 from lighton.types.file import ExternalMetadata
-from lighton.utils import _compact, _ids
+from lighton.utils import _compact, _ids, _path
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
@@ -380,11 +380,10 @@ class File(_ActiveRecord):
 
     # --- content-type classification (facets) ------------------------------
     def _facet(self, action: str, content_type: ContentType | str, **extra: object):
-        path = content_type if isinstance(content_type, str) else content_type.path
         return self._api(
             "POST",
             f"{_BASE}/{self.id}/facets",
-            json={"action": action, "content_type_path": path, **extra},
+            json={"action": action, "content_type_path": _path(content_type), **extra},
         )
 
     def classify(self, content_type: ContentType | str) -> File:

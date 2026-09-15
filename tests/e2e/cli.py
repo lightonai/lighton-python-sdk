@@ -34,6 +34,7 @@ from lighton import (
     ApiKey,
     ApiKeyScope,
     Attribute,
+    AttributeType,
     ContentType,
     ExecMode,
     ExternalMetadata,
@@ -236,6 +237,11 @@ def tags(c: Ctx) -> None:
 def content_types(c: Ctx) -> None:
     """list taxonomy → classify → set/clear attribute → facets → unclassify."""
     f = c.uploaded()
+    catalog = ContentType.templates(c.client)
+    _say(
+        f"{len(catalog)} template(s) available to adopt: {', '.join(t.path for t in catalog[:5])}"
+    )
+
     roots = ContentType.list(c.client, include_attributes=True) or _seed_taxonomy(c)
     if not roots:
         _say("no content types configured on this tenant, nothing to classify")
@@ -276,41 +282,57 @@ def content_types(c: Ctx) -> None:
 
 
 def _seed_taxonomy(c: Ctx) -> list[ContentType]:
-    """Define two throwaway content types so an empty tenant still exercises facets.
+    """Build a throwaway tree so an empty tenant still exercises the facet paths.
 
-    ponytail: the SDK models the taxonomy read-only (`ContentType.list`), so this
-    reaches for `client._request` rather than growing a write API nobody asked for.
-    Wrap the write verbs here if the SDK ever exposes them.
+    Exercises the taxonomy writes on the way: define a root, a child, a select and
+    a text attribute, then a batch, with an undefine registered for teardown (it
+    cascades the subtree, so one per root is enough).
     """
     code = f"e2e-{c.stamp}"  # codes are lowercase alphanumeric + hyphens, server-side
     for suffix in ("", "-other"):
-        c.client._request(
-            "POST",
-            "/api/v3/content-types",
-            json={
-                "action": "define_content_type",
-                "code": code + suffix,
-                "label": f"E2E {c.stamp}{suffix}",
-            },
+        root = ContentType.define(
+            c.client, code + suffix, f"E2E {c.stamp}{suffix}", description="SDK e2e run"
         )
-        c.cleanup.append(
-            lambda path=code + suffix: c.client._request(
-                "POST",
-                "/api/v3/content-types",
-                json={"action": "undefine_content_type", "content_type_path": path},
-            )
-        )
-    c.client._request(
-        "POST",
-        "/api/v3/content-types",
-        json={
-            "action": "define_attribute",
-            "content_type_path": code,
-            "name": "e2e_marker",
-            "attribute_type": "text",
-        },
+        # undefine cascades, so the root takes its children and attributes with it.
+        c.cleanup.append(lambda path=root.path: ContentType.undefine(c.client, path))
+
+    child = ContentType.define(c.client, "child", "Child", parent=code)
+    attr = ContentType.define_attribute(
+        c.client, code, "e2e_marker", AttributeType.text
     )
-    _say(f"seeded content types {code} / {code}-other with a text attribute")
+    sel = ContentType.define_attribute(
+        c.client, child, "e2e_region", AttributeType.select, choices=["FR", "US"]
+    )
+    assert sel.choices == ["FR", "US"], f"choices did not stick: {sel.choices}"
+    try:
+        ContentType.define_attribute(c.client, child, "nope", AttributeType.select)
+    except ValueError:
+        pass  # a select needs choices; refused client-side, no round trip
+    else:
+        raise AssertionError("a select without choices should have been refused")
+
+    results = ContentType.batch(
+        c.client,
+        [
+            {
+                "action": "define_content_type",
+                "parent_path": code,
+                "code": "batched",
+                "label": "Batched",
+            },
+            {
+                "action": "define_attribute",
+                "content_type_path": code,
+                "name": "e2e_batched",
+                "attribute_type": "boolean",
+            },
+        ],
+    )
+    assert all(r["status"] < 300 for r in results), f"batch failed: {results}"
+    _say(
+        f"defined {code} (+child, +batched), attributes {attr.name}/{sel.name}"
+        f"/{results[1]['data']['name']}"
+    )
     return ContentType.list(c.client, include_attributes=True)
 
 

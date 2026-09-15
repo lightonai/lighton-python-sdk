@@ -601,9 +601,13 @@ schema = convert_pydantic_to_response_format_json(Letter)
 
 ## Tags
 
-Tags scope `ask`/`search` to documents carrying them. Active-record style, but
-the API is **list/create/delete only**, there's no fetch-by-id, so `get()` /
-`refresh()` raise `NotImplementedError`.
+Tags scope `ask`/`search` to documents carrying them. They're flat labels with no
+values, which makes them the right tool for cross-cutting marks (`confidential`,
+`q4-review`) that cut across document kinds; for what a document *is*, and for
+filtering on typed values, see [Content types](#content-types).
+
+Active-record style, but the API is **list/create/delete only**, there's no
+fetch-by-id, so `get()` / `refresh()` raise `NotImplementedError`.
 
 Manage tags:
 
@@ -650,9 +654,55 @@ hits = client.search("indemnification", tags=["contracts", 12])
 
 ## Content types
 
-Content types are a company-wide taxonomy (`legal:contract:nda`, …) with typed
-attributes. Browse it with `ContentType.list()`, it returns a tree (each node has
-`children`, and `attributes` when `include_attributes=True`):
+Semantic search is good at *what does this say* and bad at *which documents count*.
+Ask for termination clauses across 50,000 documents and you get the most
+similar-looking passages in the whole corpus, supplier invoices and last year's HR
+handbook included.
+
+Content types fix that by giving documents a **category and typed fields**, so you
+can narrow the corpus before the search runs, and answer questions that aren't
+semantic at all ("every contract signed in France in 2024"). Three words, one SDK
+class each:
+
+- **Content type** (`ContentType`): a node in your company-wide taxonomy tree, such
+  as `legal:contract:nda`. It says *what kind of document this is*.
+- **Attribute** (`Attribute`): a typed field on a content type, such as
+  `jurisdiction` (select) or `signed_on` (date). It says *what you can record*.
+- **Facet** (`Facet`): one content type assigned to one file, together with that
+  file's attribute values. It says *what this document actually is*.
+
+The payoff lands in retrieval, where `content_type=` and `attribute=` filter both
+[`ask`](#ask-single-turn-rag) and [`search`](#search-retrieval-only-no-generation):
+
+```python
+# 1. describe the kind of document, once, company-wide
+nda = ContentType.define(client, "nda", "NDA", parent="legal:contract")
+ContentType.define_attribute(
+    client, nda, "jurisdiction", AttributeType.select, choices=["FR", "US", "UK"]
+)
+
+# 2. classify a document and record its values
+doc.classify(nda)
+doc.set_attribute(nda, "jurisdiction", "FR")
+
+# 3. retrieve against the narrowed corpus
+client.search(
+    "termination clause",
+    content_type=["legal:contract:nda"],
+    attribute=["jurisdiction:FR"],
+)
+```
+
+Matching is exact-or-subtree, so classifying precisely still answers broad
+questions: a document filed under `legal:contract:nda` also comes back for
+`content_type=["legal"]`. That is the difference from [tags](#tags), which are flat
+labels with no values. Reach for tags for cross-cutting marks like `confidential`,
+and content types for what a document *is*.
+
+### Browsing the taxonomy
+
+`ContentType.list()` returns the tree (each node has `children`, and `attributes`
+when `include_attributes=True`):
 
 ```python
 from lighton import ContentType
@@ -663,9 +713,11 @@ for ct in ContentType.list(client, include_attributes=True):
         print("  ", attr.name, attr.type, attr.choices)
 ```
 
-Classify a file (assign a content type) and set its attribute values. `classify`,
-`unclassify`, `set_attribute`, and `clear_attribute` all take a `ContentType`
-object or a plain path string:
+### Classifying a file
+
+Assign a content type and record its attribute values. `classify`, `unclassify`,
+`set_attribute`, and `clear_attribute` all take a `ContentType` object or a plain
+path string, so you can pass whichever you have to hand:
 
 ```python
 from lighton import File
@@ -682,6 +734,55 @@ for facet in doc.facets():
 
 doc.clear_attribute("legal:contract:nda", "jurisdiction")
 doc.unclassify("legal:contract:nda")
+```
+
+### Building the taxonomy
+
+Starting from nothing? Adopt a starter tree from the catalog:
+
+```python
+for tpl in ContentType.templates(client):
+    print(tpl.path, tpl.label)          # legal, healthcare, finance, tech, ...
+
+ContentType.adopt(client, ["legal", "finance"])
+```
+
+Or define your own. Nodes and attributes are both **idempotent**: defining an
+existing one updates it, so `define()` is also how you rename:
+
+```python
+from lighton import AttributeType
+
+compliance = ContentType.define(client, "compliance", "Compliance")
+audit = ContentType.define(client, "audit-report", "Audit Report", parent=compliance)
+
+ContentType.define_attribute(client, audit, "fiscal_year", AttributeType.number)
+ContentType.define_attribute(
+    client, audit, "jurisdiction", AttributeType.select, choices=["FR", "US", "UK"]
+)
+```
+
+`code` is lowercase alphanumeric with hyphens (`audit-report`), attribute `name` is
+snake_case, and `choices` is **required** for `select` and `multi-select` (passing
+neither raises before the request goes out).
+
+Removing cascades, so undefining a node takes its whole subtree with it:
+
+```python
+ContentType.undefine_attribute(client, audit, "fiscal_year")
+ContentType.undefine(client, "compliance")   # also removes compliance:audit-report
+```
+
+Building a tree is several calls, so `batch()` sends them in one request. Each entry
+is the body a single method would send, and you get one result per action, in order:
+
+```python
+results = ContentType.batch(client, [
+    {"action": "adopt", "content_types": ["legal"]},
+    {"action": "define_attribute", "content_type_path": "legal",
+     "name": "jurisdiction", "attribute_type": "select", "choices": ["FR", "US"]},
+])
+print([r["status"] for r in results])   # [201, 201]
 ```
 
 ## API keys

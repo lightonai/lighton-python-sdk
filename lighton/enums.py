@@ -12,6 +12,22 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+class AttributeType(StrEnum):
+    """Type of a content-type attribute column.
+
+    `select`/`multi_select` require `choices`; the API also accepts the aliases
+    `multiselect` and `richtext` for the hyphenated values used here.
+    """
+
+    text = "text"
+    number = "number"
+    date = "date"
+    boolean = "boolean"
+    select = "select"
+    multi_select = "multi-select"
+    rich_text = "rich-text"
+
+
 class ReprocessLevel(StrEnum):
     """Reprocessing level queued on a File (`pending_reprocess`), `update` = replacement."""
 
