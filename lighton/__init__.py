@@ -7,16 +7,16 @@ from lighton.content_type import Attribute, ContentType, Facet
 from lighton.enums import (
     ExecMode,
     FileStatus,
-    ReprocessLevel,
     JobStatus,
     RelevanceScoring,
+    ReprocessLevel,
     Role,
     SearchMode,
 )
 from lighton.file import File, wait_all
 from lighton.job import ExtractJob, ParseJob
 from lighton.tag import Tag
-from lighton.types import LightOnConfiguration
+from lighton.types import ExternalMetadata, LightOnConfiguration
 from lighton.workspace import Workspace
 
 __version__ = version(
@@ -31,17 +31,18 @@ __all__ = [
     "BatchProgress",
     "ContentType",
     "ExecMode",
+    "ExternalMetadata",
     "ExtractJob",
     "Facet",
     "FailedIngest",
     "File",
     "FileStatus",
-    "ReprocessLevel",
     "JobStatus",
     "LightOn",
     "LightOnConfiguration",
     "ParseJob",
     "RelevanceScoring",
+    "ReprocessLevel",
     "Role",
     "SearchMode",
     "Tag",

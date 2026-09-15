@@ -162,6 +162,43 @@ response, so a later `refresh()` (whose response omits `key`) doesn't wipe it.
   at a settle window. `ReprocessLevel` (enums.py, StrEnum, mirrors
   `PendingReprocessEnum`) has a documented domain, so it gets enumerated per the enum
   policy above.
+- **`external_metadata`** (`ExternalMetadata` in `types/file.py`, pure data per the
+  `types/` rule: `external_id`/`doc_type`/`additional_metadata`) is a real **model
+  field**, unlike `tags`, because the response returns the *same* shape the request
+  takes, so there's no `_absorb` clash and it round-trips. `create()` takes it as an
+  argument too (which sets the field) and sends it **JSON-encoded as a form field**
+  beside the multipart binary, the way `extract` ships `schema`/`options`; a nested
+  object can't be a plain form field. Verified live that updates **merge** server-side,
+  including inside `additional_metadata`, so a partial save leaves the other keys
+  alone and there's no way to drop one this way.
+- **`save()` writes the `title` field, and `tags`/`external_metadata` only when passed
+  as arguments.** The rule: a **plain model field is for a plain set** (`title`), and
+  anything whose server semantics *aren't* a set is a keyword argument, so the call
+  site names the operation. `tags` **replaces** every tag (auto-assigned included) and
+  additionally can't be a field at all (the response returns tag *objects* while the
+  request takes `list[int]`, which clashes on `_absorb`); `external_metadata`
+  **merges**. Both default to `None` = don't send the key, so a plain `save()` can
+  neither wipe tags nor rewrite metadata. `external_metadata` stays a readable field
+  (it round-trips) but assigning it does **not** send it, precisely so assignment
+  can't read as a whole-value set when the server would merge. `tag()`/`untag()`
+  remain the additive path. `tags=[]` is translated to the **`[0]` sentinel**: an
+  empty list vanishes from a form body and the resulting empty PATCH is rejected with
+  422. The payload goes through `_compact`, because httpx encodes `None` as an *empty
+  string*, so an unset title would otherwise blank the title server-side.
+- **Clearing external metadata is partial; there is no overwrite mode.** Probed live
+  (read the 422 `fields`, not just the top-level detail): `doc_type=""` blanks it
+  (200) and a null *inside* `additional_metadata` nulls that key (200), but
+  `doc_type: null` is 422 "may not be null", `external_id: ""` is 422 "may not be
+  blank", and `additional_metadata: {}` or omitting a key are no-ops because
+  everything merges. So `external_id` is effectively permanent once set. The whole
+  record can't be dropped either: the schema types `external_metadata` as
+  `oneOf [ExternalMetadataRequest, null]`, but the endpoint accepts only
+  form/multipart (`application/json` is 415), and a bare `null` there is rejected
+  as "must be a JSON object", so **the null branch is unreachable, an API bug worth
+  filing**. Consequence for the code: `model_dump_json(exclude_none=True)` is
+  load-bearing, an unset field must stay out of the payload (null 422s) while `""`
+  must survive (it's the clear). Two tests pin exactly that, plus one pinning that
+  `save()` absorbs the merged truth rather than the partial value sent.
 - **`delete_many(client, files)`** (classmethod) POSTs `{"ids": [...]}` to
   `/files/bulk-delete`, the bulk sibling of the per-file `delete()`, since teardown and
   corpus-replacement flows were one request per file. Takes `File` objects or bare ids

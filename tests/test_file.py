@@ -7,8 +7,10 @@ import lighton.file
 
 
 import json
+from urllib.parse import parse_qs
 
 from lighton import (
+    ExternalMetadata,
     File,
     FileStatus,
     LightOn,
@@ -521,3 +523,222 @@ def test_delete_many_is_all_or_nothing_on_a_bad_id():
     with pytest.raises(NotFoundError, match="not found"):
         File.delete_many(_make_client(handler), [survivor, 999999999])
     assert survivor.id == 7, "nothing was deleted, the id must survive"
+
+
+def test_create_sends_external_metadata_as_a_json_form_field(tmp_path):
+    # A nested object can't be a form field, so it rides JSON-encoded next to the binary.
+    doc = tmp_path / "report.pdf"
+    doc.write_bytes(b"%PDF-1.4 fake")
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent["body"] = request.content
+        return httpx.Response(201, json={"id": 7, "status": "pending"})
+
+    meta = ExternalMetadata(
+        external_id="JIRA-123", doc_type="incident", additional_metadata={"v": 3}
+    )
+    f = File(path=doc, workspace_id=3).create(
+        _make_client(handler), external_metadata=meta
+    )
+
+    assert b'"external_id":"JIRA-123"' in sent["body"]
+    assert b'"additional_metadata":{"v":3}' in sent["body"]
+    assert f.external_metadata == meta  # the argument lands on the model too
+
+
+def test_create_sends_the_external_metadata_field_without_the_argument(tmp_path):
+    doc = tmp_path / "report.pdf"
+    doc.write_bytes(b"%PDF-1.4 fake")
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent["body"] = request.content
+        return httpx.Response(201, json={"id": 7, "status": "pending"})
+
+    File(
+        path=doc, workspace_id=3, external_metadata=ExternalMetadata(external_id="X-1")
+    ).create(_make_client(handler))
+    assert b'"external_id":"X-1"' in sent["body"]
+
+
+def test_save_sends_only_what_it_is_given():
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 7, "title": "old"})
+        sent["form"] = parse_qs(request.content.decode())
+        return httpx.Response(
+            200,
+            json={
+                "id": 7,
+                "title": "new",
+                # the documented shape clash: objects out, list[int] in
+                "tags": [{"id": 3, "name": "legal", "auto_assigned": False}],
+                "external_metadata": {"external_id": "JIRA-9", "doc_type": "page"},
+            },
+        )
+
+    f = File.get(_make_client(handler), 7)
+    f.title = "new"
+    f.save(external_metadata=ExternalMetadata(external_id="JIRA-9", doc_type="page"))
+
+    assert f"{sent['form']['title']}" == "['new']"
+    assert json.loads(sent["form"]["external_metadata"][0]) == {
+        "external_id": "JIRA-9",
+        "doc_type": "page",
+    }
+    assert "tags" not in sent["form"], "a plain save() must not touch tags"
+    # tags came back as objects and must not have landed on the model
+    assert not hasattr(f, "tags")
+    assert f.external_metadata is not None
+    assert f.external_metadata.external_id == "JIRA-9"  # ...but this round-trips
+
+
+def test_save_with_tags_replaces_them_and_resolves_names():
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/api/v3/tags":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [{"id": 3, "name": "legal", "auto_assign": True}],
+                    "next": None,
+                },
+            )
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 7, "title": "t"})
+        sent["form"] = parse_qs(request.content.decode())
+        return httpx.Response(200, json={"id": 7})
+
+    File.get(_make_client(handler), 7).save(tags=["legal", 4])
+    assert sent["form"]["tags"] == ["4", "3"]
+
+
+def test_save_with_empty_tags_sends_the_clear_sentinel():
+    # [] vanishes from a form body and the empty PATCH is rejected, so [0] clears.
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 7, "title": "t"})
+        sent["form"] = parse_qs(request.content.decode())
+        return httpx.Response(200, json={"id": 7})
+
+    File.get(_make_client(handler), 7).save(tags=[])
+    assert sent["form"]["tags"] == ["0"]
+
+
+def test_save_omits_an_unset_title_instead_of_blanking_it():
+    # httpx encodes None as an empty string, which would blank the title server-side.
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 7})
+        sent["body"] = request.content.decode()
+        return httpx.Response(200, json={"id": 7})
+
+    File.get(_make_client(handler), 7).save(tags=[3])
+    assert "title" not in sent["body"]
+
+
+def test_save_shows_the_merged_metadata_the_server_kept():
+    # external_metadata merges server-side and cannot be cleared (no API for it),
+    # so save() absorbs the response: the field must show what the server holds,
+    # not the partial value that was assigned.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 7})
+        return httpx.Response(
+            200,
+            json={
+                "id": 7,
+                "external_metadata": {  # the server merged, keeping external_id
+                    "external_id": "JIRA-1",
+                    "doc_type": "ticket",
+                    "additional_metadata": {"url": "https://x/1"},
+                },
+            },
+        )
+
+    f = File.get(_make_client(handler), 7)
+    f.external_metadata = ExternalMetadata(
+        doc_type="ticket"
+    )  # partial: looks like a set
+    f.save()
+
+    assert f.external_metadata is not None
+    assert f.external_metadata.external_id == "JIRA-1", (
+        "save() must not leave the object claiming a state the server discarded"
+    )
+    assert f.external_metadata.additional_metadata == {"url": "https://x/1"}
+
+
+def test_plain_save_writes_only_the_title():
+    # tags and external_metadata are arguments, so an untouched document keeps both
+    # even when the model field carries metadata read back from an earlier fetch.
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "id": 7,
+                    "title": "old",
+                    "external_metadata": {"external_id": "X"},
+                },
+            )
+        sent["form"] = parse_qs(request.content.decode())
+        return httpx.Response(200, json={"id": 7, "title": "new"})
+
+    f = File.get(_make_client(handler), 7)
+    assert f.external_metadata is not None
+    assert f.external_metadata.external_id == "X"  # readable field...
+    f.title = "new"
+    f.save()
+
+    assert sent["form"] == {"title": ["new"]}, (
+        "a plain save() must write only the title"
+    )
+
+
+def test_save_sends_an_empty_string_but_omits_an_unset_metadata_field():
+    # exclude_none is load-bearing: the API 422s on a null doc_type but accepts ""
+    # as the blank-clear, so an unset field must vanish while "" must survive.
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 7})
+        sent["form"] = parse_qs(request.content.decode())
+        return httpx.Response(200, json={"id": 7})
+
+    f = File.get(_make_client(handler), 7)
+    f.save(external_metadata=ExternalMetadata(doc_type=""))
+    payload = json.loads(sent["form"]["external_metadata"][0])
+
+    assert payload == {"doc_type": ""}, "the blank-clear must reach the API verbatim"
+    assert "external_id" not in payload, "an unset field would be sent as null and 422"
+
+
+def test_save_keeps_a_null_inside_additional_metadata():
+    # Nulling one key of additional_metadata is the only way to clear it, so the
+    # nested None must survive serialization.
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 7})
+        sent["form"] = parse_qs(request.content.decode())
+        return httpx.Response(200, json={"id": 7})
+
+    f = File.get(_make_client(handler), 7)
+    f.save(external_metadata=ExternalMetadata(additional_metadata={"version": None}))
+
+    assert json.loads(sent["form"]["external_metadata"][0]) == {
+        "additional_metadata": {"version": None}
+    }

@@ -28,7 +28,8 @@ from lighton.content_type import Facet
 from lighton.enums import FileStatus, ReprocessLevel
 from lighton.exceptions import LightOnError
 from lighton.tag import resolve_ids
-from lighton.utils import _ids
+from lighton.types.file import ExternalMetadata
+from lighton.utils import _compact, _ids
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
@@ -67,6 +68,13 @@ class File(_ActiveRecord):
     )
     title: str | None = Field(
         None, description="Document title; defaults to the filename server-side."
+    )
+    external_metadata: ExternalMetadata | None = Field(
+        None,
+        description=(
+            "Origin of the document in a third-party system. Settable on create() "
+            "and save(); the response returns the same shape, so it round-trips."
+        ),
     )
     # Read-only, populated from responses.
     status: FileStatus | None = Field(
@@ -170,12 +178,20 @@ class File(_ActiveRecord):
                 f.id = None
 
     # --- instance lifecycle ------------------------------------------------
-    def create(self, client: LightOn, *, tags: _list[int] | None = None) -> File:
+    def create(
+        self,
+        client: LightOn,
+        *,
+        tags: _list[int] | None = None,
+        external_metadata: ExternalMetadata | None = None,
+    ) -> File:
         """Upload the file (multipart), this starts ingestion.
 
         Args:
             client: The client to upload with and bind to `self`.
             tags: Optional tag ids to assign to the document on upload.
+            external_metadata: Where this document came from in a third-party
+                system. Overrides the `external_metadata` field if both are set.
 
         Returns:
             `self`, updated with the server-assigned id and initial status.
@@ -195,6 +211,14 @@ class File(_ActiveRecord):
             data["title"] = self.title
         if tags:
             data["tags"] = tags  # httpx encodes a list as repeated form fields
+        if external_metadata is not None:
+            self.external_metadata = external_metadata
+        if self.external_metadata is not None:
+            # A nested object can't ride as a form field; JSON-encode it, the way
+            # extract sends `schema`/`options` alongside a multipart upload.
+            data["external_metadata"] = self.external_metadata.model_dump_json(
+                exclude_none=True
+            )
         # Read into memory (not a streamed handle): a 429 retry in _request resends
         # the same body, and a consumed handle would resend empty.
         # ponytail: whole file in RAM during its upload; stream + reopen-per-attempt
@@ -206,17 +230,71 @@ class File(_ActiveRecord):
         self._client = client
         return self._absorb(resp)
 
-    def save(self) -> File:
-        """Persist local edits to title (PATCH). filename is immutable server-side.
+    def save(
+        self,
+        *,
+        tags: _list[Tag | int | str] | None = None,
+        external_metadata: ExternalMetadata | None = None,
+    ) -> File:
+        """Persist local edits to `title`, plus whatever you pass explicitly.
+
+        `filename` is immutable server-side. `title` is a plain model field: set it
+        and save. `tags` and `external_metadata` are **arguments, not fields**,
+        because neither is a plain set server-side, and a keyword at the call site
+        says which one you're doing:
+
+        - `tags` **replaces** every tag on the document, auto-assigned included.
+          Pass `[]` to remove them all; `tag()`/`untag()` stay the additive path.
+          (It also can't be a field: the response returns tag *objects*, not the
+          `list[int]` the request takes, which would clash on absorb.)
+        - `external_metadata` **merges** into what's stored, including inside
+          `additional_metadata`, so a partial update leaves the other keys alone.
+          The field of the same name stays readable and round-trips; it just isn't
+          what gets sent, so assigning it can't read as a whole-value set.
+
+        Omitting either leaves that part of the document untouched, so a plain
+        `save()` only ever writes the title.
+
+        Clearing metadata is partial, and the shape is the API's, verified live:
+        `doc_type=""` blanks it, and a null *inside* `additional_metadata`
+        (`{"version": None}`) nulls that key. `external_id` can be neither blanked
+        (422 blank) nor nulled (422 null), and the whole record can't be dropped:
+        the schema offers a null `external_metadata`, but the endpoint takes only
+        form/multipart, where a bare `null` is rejected as "must be a JSON object",
+        and `application/json` is 415. So the null branch is unreachable.
+
+        ponytail: `exclude_none=True` is load-bearing, not tidiness. It keeps an
+        unset field out of the payload (a None `doc_type` would 422), while an
+        empty string still goes through, which is what makes the blank-clear work.
+
+        Args:
+            tags: Replacement tags, Tag objects, ids, or names (mix freely). None
+                (the default) leaves the document's tags untouched; `[]` clears them.
+            external_metadata: Origin fields to merge in. None (the default) leaves
+                the stored metadata untouched.
 
         Returns:
-            `self`, refreshed with the server's response.
+            `self`, refreshed with the server's response (so `external_metadata`
+            shows the merged result, not the partial value you sent).
+
+        Raises:
+            ValueError: If this file isn't persisted, or a name/Tag can't resolve.
         """
         # Form-encoded, not JSON: the /files endpoints accept only multipart and
         # x-www-form-urlencoded, a JSON body is rejected with 415.
-        return self._absorb(
-            self._api("PATCH", f"{_BASE}/{self.id}", data={"title": self.title})
+        data = _compact(
+            title=self.title,
+            external_metadata=(
+                external_metadata.model_dump_json(exclude_none=True)
+                if external_metadata is not None
+                else None
+            ),
         )
+        if tags is not None:
+            # The API wants a [0] sentinel to clear: an empty list vanishes from a
+            # form body, and the resulting empty PATCH is rejected outright.
+            data["tags"] = resolve_ids(self._bound_client(), tags) or [0]
+        return self._absorb(self._api("PATCH", f"{_BASE}/{self.id}", data=data))
 
     def replace(
         self, path: str | Path, *, wait: bool = False, timeout: float = 300.0
