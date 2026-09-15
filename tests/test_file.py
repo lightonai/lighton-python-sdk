@@ -3,9 +3,20 @@
 import httpx
 import pytest
 
+import lighton.file
+
+
 import json
 
-from lighton import File, FileStatus, LightOn, LightOnConfiguration, Tag, Workspace
+from lighton import (
+    File,
+    FileStatus,
+    LightOn,
+    LightOnConfiguration,
+    ReprocessLevel,
+    Tag,
+    Workspace,
+)
 
 
 def _make_client(handler):
@@ -360,3 +371,110 @@ def test_workspace_ingest_fills_workspace_id(tmp_path):
     f = ws.ingest(File(path=doc))
     assert f.id == 9 and f.workspace_id == 42
     assert b'name="workspace_id"' in sent["body"] and b"42" in sent["body"]
+
+
+def test_replace_patches_multipart_with_new_content(tmp_path):
+    new = tmp_path / "v2.pdf"
+    new.write_bytes(b"%PDF-1.4 v2")
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 7, "filename": "v1.pdf"})
+        sent["method"] = request.method
+        sent["path"] = request.url.path
+        sent["ct"] = request.headers["content-type"]
+        sent["body"] = request.content
+        return httpx.Response(200, json={"id": 7, "filename": "v1.pdf"})
+
+    f = File.get(_make_client(handler), 7).replace(new)
+
+    assert (sent["method"], sent["path"]) == ("PATCH", "/api/v3/files/7")
+    assert sent["ct"].startswith("multipart/form-data")
+    assert b"%PDF-1.4 v2" in sent["body"]
+    # The PATCH response still describes the previous content (live-API behaviour),
+    # and _absorb takes it at face value; the new filename shows up on refresh().
+    assert f.filename == "v1.pdf"
+    assert f.path == new  # the local source is tracked, as create() does
+
+
+def test_replace_then_wait_does_not_return_on_the_stale_status(tmp_path):
+    # Regression: while pending_reprocess is set the queued work has not started
+    # and `status` still reports the PREVIOUS run, so a hand-written
+    # `f.replace(...); f.wait()` must not call it done on that stale "embedded".
+    new = tmp_path / "v2.pdf"
+    new.write_bytes(b"%PDF-1.4 v2")
+    # What the live API returns: the stale terminal status, then the new run.
+    polls = iter(
+        [
+            {"status": "embedded", "pending_reprocess": "update"},  # queued, stale
+            {"status": "parsing", "pending_reprocess": None},  # started
+            {"status": "embedded", "pending_reprocess": None},  # done, new content
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 7, **next(polls)})
+        return httpx.Response(
+            200, json={"id": 7, "status": "embedded", "pending_reprocess": "update"}
+        )
+
+    f = File(id=7, status=FileStatus.embedded)
+    f._client = _make_client(handler)
+
+    f.replace(new)
+    assert f.pending_reprocess is ReprocessLevel.update  # absorbed from the PATCH
+    assert f.status == "embedded"  # ...next to a status describing the OLD run
+
+    f.wait(timeout=5, poll=0)
+    assert f.pending_reprocess is None and f.status == "embedded"
+    assert next(polls, None) is None, "wait() returned before the new run finished"
+
+
+def test_replace_wait_true_blocks_on_the_pending_reprocess(tmp_path, monkeypatch):
+    # Same guarantee through the wait=True shorthand, which owns its poll interval.
+    monkeypatch.setattr(lighton.file.time, "sleep", lambda _: None)
+    new = tmp_path / "v2.pdf"
+    new.write_bytes(b"%PDF-1.4 v2")
+    polls = iter(
+        [
+            {"status": "embedded", "pending_reprocess": "update"},
+            {"status": "embedded", "pending_reprocess": None},
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": 7, **next(polls)})
+        return httpx.Response(
+            200, json={"id": 7, "status": "embedded", "pending_reprocess": "update"}
+        )
+
+    f = File(id=7, status=FileStatus.embedded)
+    f._client = _make_client(handler)
+    f.replace(new, wait=True, timeout=5)
+
+    assert next(polls, None) is None, "wait=True did not poll past the queued reprocess"
+
+
+def test_wait_ignores_pending_reprocess_when_unset(tmp_path):
+    # A plain ingestion never sets the field; wait() must not regress into polling.
+    doc = tmp_path / "a.txt"
+    doc.write_text("x")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": 1, "status": "embedded"})
+        raise AssertionError("wait() polled a file that was already terminal")
+
+    f = File(path=doc, workspace_id=3).create(_make_client(handler))
+    assert f.wait(timeout=5, poll=0).status == "embedded"
+
+
+def test_replace_needs_an_id(tmp_path):
+    # Addressed by id, not name: an unsaved File has nothing to replace.
+    new = tmp_path / "v2.pdf"
+    new.write_bytes(b"x")
+    with pytest.raises(ValueError, match="created or retrieved"):
+        File(path=new).replace(new)

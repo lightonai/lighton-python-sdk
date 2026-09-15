@@ -326,6 +326,45 @@ with LightOn() as client:
     doc.delete()
 ```
 
+### Replacing a document's content
+
+`replace()` swaps the content of an existing document and re-ingests it. The
+document **keeps its id**, tags, and content-type classifications, so links and
+stored references survive what used to need a delete plus a re-upload. The new file
+can be of a different type.
+
+```python
+doc.replace("report_v2.pdf", wait=True)   # same id, new content
+```
+
+Because titles and filenames aren't unique, `replace()` is addressed by **id**:
+it's an instance method on a document you already resolved. Resolve it first with
+`File.get(client, id)`, or check what `File.get_by_name()` returned:
+
+```python
+docs = File.get_by_name(client, "report.pdf", workspace=42)
+if len(docs) != 1:
+    raise SystemExit(f"{len(docs)} documents named report.pdf, pick one by id")
+docs[0].replace("report_v2.pdf", wait=True)
+```
+
+Two things to expect. `filename` follows the new file while `title` is preserved, so
+`get_by_name()` still finds the document under the name it was uploaded with. And the
+response still describes the *previous* content, because the old version stays served
+until re-ingestion actually starts; the queued work shows up as `pending_reprocess`:
+
+```python
+doc.replace("report_v2.pdf")
+print(doc.pending_reprocess, doc.status)   # "update" embedded  <- embedded is STALE
+doc.wait()                                 # blocks while a reprocess is queued
+print(doc.pending_reprocess, doc.status)   # None embedded      <- the new run
+```
+
+`wait()` treats a queued reprocess as not-terminal, so `wait=True` and a hand-written
+`doc.replace(...); doc.wait()` are both safe. Reading `status` yourself right after a
+replace is not: it reports the previous run until processing starts. `wait=True` accounts for that; if
+you poll yourself, don't trust the first `status` you read back.
+
 Once a file reaches `embedded`, it's retrievable by `ask`/`search`. You can also
 run `extract` straight on it, `client.extract(schema=Invoice, file=doc)`, instead
 of uploading the document a second time (see [Extract](#extract)).
