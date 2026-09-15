@@ -324,7 +324,15 @@ with LightOn() as client:
     doc.untag([12])
 
     doc.delete()
+
+    # Deleting many? One request, not one per file.
+    File.delete_many(client, File.list(client, workspace_id=42))
 ```
+
+`delete_many()` takes `File` objects or bare ids (mixed), and is **all-or-nothing**:
+if any id is unknown or isn't yours the API rejects the whole call and deletes
+nothing, which surfaces as a `NotFoundError`. There is no partial-success report
+because there is no partial success. An empty list is a local no-op.
 
 ### Replacing a document's content
 

@@ -15,6 +15,7 @@ import time
 
 # The list() classmethod shadows builtin list in annotations (class scope).
 from builtins import list as _list
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,7 @@ from lighton.content_type import Facet
 from lighton.enums import FileStatus, ReprocessLevel
 from lighton.exceptions import LightOnError
 from lighton.tag import resolve_ids
+from lighton.utils import _ids
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
@@ -136,6 +138,36 @@ class File(_ActiveRecord):
             for f in cls.list(client, workspace_id=workspace_id, title=stem)
             if f.title in (name, stem)
         ]
+
+    @classmethod
+    def delete_many(cls, client: LightOn, files: Sequence[File | int]) -> None:
+        """Delete many files in one request (POST /files/bulk-delete).
+
+        All-or-nothing: if any id is unknown (or not yours), the API rejects the
+        whole call with 404 and deletes **nothing**, which this surfaces as a
+        `NotFoundError`. There is no partial-success result to report, so a failure
+        raises rather than returning a per-file report: nothing was deleted, and
+        retrying with the ids you can account for is the fix.
+
+        Args:
+            client: The client to delete with.
+            files: The files to delete, File objects or bare ids (mix freely).
+                Any sequence, so `File.list(...)` passes straight in. Empty is a
+                no-op (the endpoint rejects an empty list).
+
+        Returns:
+            None. Any File objects passed in have their `id` cleared, as delete() does.
+
+        Raises:
+            NotFoundError: If any id is unknown; no file is deleted in that case.
+        """
+        ids = _ids(files)
+        if not ids:
+            return
+        client._request("POST", f"{_BASE}/bulk-delete", json={"ids": ids})
+        for f in files:
+            if not isinstance(f, int):
+                f.id = None
 
     # --- instance lifecycle ------------------------------------------------
     def create(self, client: LightOn, *, tags: _list[int] | None = None) -> File:
