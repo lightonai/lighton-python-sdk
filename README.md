@@ -323,6 +323,9 @@ with LightOn() as client:
     doc.tag([7, "contracts"])
     doc.untag([12])
 
+    # Or replace the whole set in one save (see External metadata below)
+    doc.save(tags=["contracts", 7])
+
     doc.delete()
 
     # Deleting many? One request, not one per file.
@@ -333,6 +336,73 @@ with LightOn() as client:
 if any id is unknown or isn't yours the API rejects the whole call and deletes
 nothing, which surfaces as a `NotFoundError`. There is no partial-success report
 because there is no partial success. An empty list is a local no-op.
+
+### External metadata
+
+Documents ingested from a third-party system keep their origin with
+`ExternalMetadata`, so a later sync can match a platform document back to the record
+it came from. Set it on upload, or with `save()`:
+
+```python
+from lighton import ExternalMetadata, File
+
+doc = ws.ingest(File(
+    path="incident.pdf",
+    external_metadata=ExternalMetadata(
+        external_id="JIRA-123",
+        doc_type="incident",
+        additional_metadata={"url": "https://jira/INC-123", "version": 3},
+    ),
+))
+print(doc.external_metadata.external_id)   # round-trips, including after refresh()
+```
+
+To change it, pass it to `save()`. Every update **merges**, all the way into
+`additional_metadata`, so a partial edit leaves the other keys alone. There is no
+replace or overwrite mode: merging is the only update the API offers.
+
+```python
+doc.save(external_metadata=ExternalMetadata(doc_type="ticket"))
+print(doc.external_metadata)   # external_id and additional_metadata are still there
+```
+
+Because everything merges, you **remove a value by writing an empty one**, and not
+everything can be removed:
+
+| to remove | how |
+| --- | --- |
+| `doc_type` | `ExternalMetadata(doc_type="")` |
+| one key of `additional_metadata` | `ExternalMetadata(additional_metadata={"version": None})` |
+| `external_id` | **not possible**, it can only be overwritten |
+| the whole record | **not possible** |
+
+```python
+doc.save(external_metadata=ExternalMetadata(doc_type=""))
+```
+
+> **Treat `external_id` as permanent.** The API rejects it both blank (`422 may not
+> be blank`) and null (`422 may not be null`), and there's no way to drop the record
+> as a whole. Set it deliberately on upload; you can overwrite it later, never clear it.
+
+`save()` absorbs the response, so `doc.external_metadata` always shows what the
+server actually kept, not the partial value you sent.
+
+#### What `save()` writes
+
+It writes the `title` field, plus whatever you hand it explicitly. `tags` and
+`external_metadata` are **arguments rather than fields**, because neither is a plain
+set server-side and the keyword says which one you mean: `tags` *replaces* the whole
+set, `external_metadata` *merges*. Omit either and that part is left alone:
+
+```python
+doc.title = "Q4 Report"
+doc.save()                          # writes only the title
+doc.save(tags=["contracts", 7])     # replaces every tag (objects, ids, or names)
+doc.save(tags=[])                   # removes them all
+```
+
+Use `tag()` / `untag()` to add or remove a few without replacing the rest.
+`filename` is immutable server-side and never sent.
 
 ### Replacing a document's content
 

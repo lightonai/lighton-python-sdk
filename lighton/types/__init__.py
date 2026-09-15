@@ -1,3 +1,4 @@
 from lighton.types.client import LightOnConfiguration
+from lighton.types.file import ExternalMetadata
 
-__all__ = ["LightOnConfiguration"]
+__all__ = ["ExternalMetadata", "LightOnConfiguration"]

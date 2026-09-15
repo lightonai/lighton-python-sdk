@@ -36,6 +36,7 @@ from lighton import (
     Attribute,
     ContentType,
     ExecMode,
+    ExternalMetadata,
     File,
     LightOn,
     RelevanceScoring,
@@ -171,7 +172,17 @@ def upload(c: Ctx) -> None:
     """ingest (blocking) → get_by_name → save title → list."""
     ws = c.workspace()
     doc = c.docs[0]
-    f = ws.ingest(File(path=doc), wait=True)
+    f = ws.ingest(
+        File(
+            path=doc,
+            external_metadata=ExternalMetadata(
+                external_id=f"e2e-{c.stamp}",
+                doc_type="incident",
+                additional_metadata={"run": c.stamp},
+            ),
+        ),
+        wait=True,
+    )
     assert f.id is not None, "ingest() returned no id"
     c.file = f
     _say(f"ingested {doc.name} as file {f.id} ({f.status}, {f.total_pages} pages)")
@@ -184,6 +195,19 @@ def upload(c: Ctx) -> None:
     f.save()
     f.refresh()
     assert f.title == f"e2e {doc.stem}", "title did not persist"
+
+    # external_metadata: set on upload, round-trips, and merges on update.
+    assert f.external_metadata is not None, "external_metadata did not come back"
+    assert f.external_metadata.external_id == f"e2e-{c.stamp}", "origin id was lost"
+    f.save(external_metadata=ExternalMetadata(doc_type="ticket"))  # partial: merges
+    f.refresh()
+    got = f.external_metadata
+    assert got is not None and got.doc_type == "ticket", "partial update did not apply"
+    assert got.external_id == f"e2e-{c.stamp}", "a partial update dropped external_id"
+    assert (got.additional_metadata or {}).get("run") == c.stamp, (
+        "a partial update dropped additional_metadata"
+    )
+    _say(f"external metadata merged: {got.external_id} / {got.doc_type}")
 
     listed = File.list(c.client, workspace_id=ws.id)
     assert any(x.id == f.id for x in listed), "missing from File.list()"
