@@ -1,11 +1,16 @@
 # git-cliff — changelog from conventional commits. See https://git-cliff.org
+#
+# Contributor credit uses `commit.author.name`, the git author, which squash-merged
+# PRs carry from the PR author. A GitHub @handle would auto-link in a release, but
+# needs [remote.github] plus a token, and would leave the changelog un-renderable
+# offline; the name is free and works everywhere.
 [changelog]
 header = ""
 body = """
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | upper_first }}
 {% for commit in commits %}
-- {{ commit.message | upper_first }}\
+- {{ commit.message | upper_first }}{% if commit.author.name %} ({{ commit.author.name }}){% endif %}\
 {% endfor %}
 {% endfor %}
 """

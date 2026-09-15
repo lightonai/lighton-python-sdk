@@ -379,11 +379,28 @@ generalize speculatively for a shape only one subclass needs.
   `DESC` (optional) becomes the **annotated tag message**, free-text release notes.
 - The pushed tag fires `.github/workflows/release.yml`: it re-checks `tag == uv version`,
   `uv build`s the sdist+wheel, runs **git-cliff** (`cliff.toml`, conventional-commit
-  grouping), prepends the annotated-tag message (the `DESC`) above the changelog, and
-  `gh release create`s with the artifacts attached.
+  grouping), prepends the annotated-tag message (the `DESC`) above the changelog,
+  publishes to PyPI, `gh release create`s with the artifacts attached, and finally
+  announces on Slack.
+- **Changelog credits contributors** via `commit.author.name` in `cliff.toml`, which
+  squash-merged PRs carry from the PR author. Deliberately the git name and not a
+  GitHub `@handle`: a handle would auto-link in a release but needs `[remote.github]`
+  plus a token, and would make the changelog un-renderable offline. Note git author
+  names are whatever each contributor configured, so spelling can vary between commits.
+- **Slack announcement** is the last step, posting the assembled notes to the
+  `RELEASE_SLACK_WEBHOOK_URL` repo secret. It **skips with a warning when the secret is
+  absent**, so a fork or a repo without Slack still releases cleanly. The notes are
+  markdown and Slack speaks mrkdwn, so the step escapes `& < >` first (they are markup
+  to Slack, and an unescaped `<SDK>` in a commit message would silently vanish), then
+  rewrites `### x` and `**bold**` to `*x*`, and caps the body well under Slack's 40k
+  limit; the linked release always carries the full text. The payload is built with
+  `jq --arg`, never string interpolation, so quotes and `$` in a commit message can't
+  break the JSON. It runs **after** the release exists, so a webhook failure can never
+  cost you the release, but it does fail the job loudly rather than announcing nothing
+  in silence.
 - **Version is single-source:** `pyproject.toml`. `__version__` in `lighton/__init__.py`
   reads it via `importlib.metadata.version("lighton")`, don't hard-code it back.
-- Attach-wheels only; no PyPI publish yet (add `uv publish` + a trusted publisher when wanted).
+- Artifacts are attached to the release **and** published to PyPI (`uv publish`, `PYPI_PUBLISH_TOKEN` secret).
 
 ## Conventions
 
