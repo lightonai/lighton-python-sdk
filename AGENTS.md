@@ -51,10 +51,10 @@ itself. Construct them with keyword args (pydantic rejects positional). Use
 model field types. **`StrEnum`, not `Enum`**, members are strings, so `f.status ==
 "embedded"` and set-membership keep working without `.value`, and pydantic
 serializes them back to plain strings for request bodies. Values mirror the generated
-api enums (`StatusEnum`/`RoleEnum`); if the server vocab changes, `make gen-types`
-surfaces it and you update `enums.py` by hand. Only enum a field whose full domain is
-known, `workspace_type`/`document_upload_method` stay `str` (plain `str` in the schema
-too, no documented value set).
+api enums (`DocumentStatusEnum`/`WorkspaceMemberRoleEnum`); if the server vocab
+changes, `make gen-types` surfaces it and you update `enums.py` by hand. Only enum
+a field whose full domain is known, `workspace_type`/`document_upload_method` stay
+`str` (plain `str` in the schema too, no documented value set).
 
 ## Client
 
