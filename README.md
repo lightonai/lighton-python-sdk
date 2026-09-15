@@ -135,7 +135,9 @@ More on file management (list, fetch, tags, delete) and polling in
 ## Primary verbs
 
 Four actions live directly on the client. `ask` and `search` query your **indexed**
-documents, scope them with `workspaces=`, `tags=`, or `files=` (objects or bare ids).
+documents, scope them with `workspaces=`, `tags=`, or `files=` (objects or bare ids),
+and narrow further with `content_type=`/`attribute=` (see
+[Content types](#content-types)).
 `parse` and `extract` process a document **on the fly**, no indexing required,
 `extract` can also target a file you already ingested, with `file=`. Full
 reference at [developers.lighton.ai](https://developers.lighton.ai). The per-verb
@@ -198,6 +200,21 @@ resp = client.search(
 for r in resp.results:
     print(r.score, r.content)
 ```
+
+Filter on the taxonomy with `content_type=` and `attribute=` (both apply to `ask` too):
+
+```python
+resp = client.search(
+    "termination clause",
+    content_type=["legal:contract"],          # or a ContentType object
+    attribute=["fiscal_year:2024|2025", "status:active"],
+)
+```
+
+`content_type` paths are OR-matched and exact-or-subtree (`legal` also matches
+`legal:contract`), with wildcards (`legal:contract*`, `*nda*`). `attribute` entries
+are ANDed, `|` ORs within one entry; also `name` (has any value), `name:>value`,
+`name:prefix*`, `name:*text*`.
 
 `relevance_scoring` tunes the scoring step (applies to `ask` too):
 

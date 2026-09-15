@@ -5,7 +5,7 @@ import json
 import httpx
 from pydantic import BaseModel
 
-from lighton import LightOn, LightOnConfiguration, Tag, Workspace
+from lighton import ContentType, LightOn, LightOnConfiguration, Tag, Workspace
 from lighton.enums import RelevanceScoring
 
 
@@ -118,3 +118,26 @@ def test_ask_without_schema_omits_response_format():
 
     make_client(handler).ask("q")
     assert "response_format" not in seen["body"]
+
+
+def test_ask_facet_filters():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"results": [], "answer": ""})
+
+    # content_type accepts ContentType objects or bare paths; attribute is a passthrough.
+    make_client(handler).ask(
+        "q",
+        content_type=[
+            ContentType(path="legal:contract", code="contract", label="Contract"),
+            "finance:*",
+        ],
+        attribute=["fiscal_year:2024|2025", "status:active"],
+    )
+    assert seen["body"] == {
+        "query": "q",
+        "content_type": ["legal:contract", "finance:*"],
+        "attribute": ["fiscal_year:2024|2025", "status:active"],
+    }

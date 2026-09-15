@@ -4,7 +4,7 @@ import json
 
 import httpx
 
-from lighton import LightOn, LightOnConfiguration, SearchMode, Tag
+from lighton import ContentType, LightOn, LightOnConfiguration, SearchMode, Tag
 
 
 def make_client(handler) -> LightOn:
@@ -54,3 +54,26 @@ def test_search_scopes_by_tag_names():
 
     make_client(handler).search("q", tags=["legal", 4])
     assert seen["body"] == {"query": "q", "tag_id": [4, 3]}
+
+
+def test_search_facet_filters():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"results": []})
+
+    # content_type accepts ContentType objects or bare paths; attribute is a passthrough.
+    make_client(handler).search(
+        "q",
+        content_type=[
+            ContentType(path="legal:contract", code="contract", label="Contract"),
+            "finance:*",
+        ],
+        attribute=["fiscal_year:2024|2025", "status:active"],
+    )
+    assert seen["body"] == {
+        "query": "q",
+        "content_type": ["legal:contract", "finance:*"],
+        "attribute": ["fiscal_year:2024|2025", "status:active"],
+    }
