@@ -339,7 +339,9 @@ class FacetAction(BaseModel):
     Nothing is sent until the list reaches a file, so one list applies to many.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    # forbid, not ignore: this is a write model, a misspelled field must fail
+    # loudly rather than vanish from the body. Raw dicts are the unmodelled escape.
+    model_config = ConfigDict(extra="forbid")
 
     action: FacetActionType = Field(
         description="The write to perform, the API's verb (see FacetActionType)."

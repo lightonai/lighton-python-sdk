@@ -11,6 +11,7 @@ from urllib.parse import parse_qs
 
 from lighton import (
     MAX_FACET_ACTIONS,
+    ContentType,
     DownloadPurpose,
     ExternalMetadata,
     FacetAction,
@@ -24,7 +25,7 @@ from lighton import (
     ThumbnailStatus,
     Workspace,
 )
-from lighton.exceptions import LightOnAPIError, NotFoundError
+from lighton.exceptions import NotFoundError
 from lighton.types.api import Page
 
 
@@ -294,7 +295,6 @@ def test_get_by_name_requires_a_persisted_workspace():
 def test_classify_and_attributes_post_actions(tmp_path):
     doc = tmp_path / "a.txt"
     doc.write_text("x")
-    from lighton import ContentType
 
     bodies = []
 
@@ -341,8 +341,6 @@ def _no_request(request: httpx.Request) -> httpx.Response:
 
 
 def test_batch_facets_posts_every_action_in_one_request():
-    from lighton import ContentType
-
     requests = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -496,15 +494,17 @@ def test_batch_facets_passes_raw_dicts_through():
 
 
 def test_batch_facets_reports_the_failing_action_index():
+    """`index` rides on the status-mapped class, so `except NotFoundError` still works."""
+
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(422, json={"detail": "unknown content type", "index": 2})
+        return httpx.Response(404, json={"detail": "unknown content type", "index": 2})
 
     actions = [
         FacetAction.classify("legal:contract:nda"),
         FacetAction.set_attribute("legal:contract:nda", "jurisdiction", "FR"),
         FacetAction.classify("nope:not-a-type"),
     ]
-    with pytest.raises(LightOnAPIError) as excinfo:
+    with pytest.raises(NotFoundError) as excinfo:
         _facet_file(handler).batch_facets(actions)
 
     assert excinfo.value.index == 2
@@ -518,6 +518,17 @@ def test_facet_action_rejects_a_value_action_without_an_attribute_name():
     with pytest.raises(ValueError, match="attribute_name"):
         FacetAction(
             action=FacetActionType.set_value, content_type_path="legal:contract:nda"
+        )
+
+
+def test_facet_action_rejects_a_misspelled_field():
+    # a write model: a typo must not silently vanish from the request body
+    with pytest.raises(ValueError, match="atribute_name"):
+        FacetAction(
+            action=FacetActionType.clear_value,
+            content_type_path="legal:contract:nda",
+            attribute_name="jurisdiction",
+            atribute_name="typo",  # ty: ignore[unknown-argument]
         )
 
 

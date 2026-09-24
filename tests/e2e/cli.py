@@ -396,7 +396,7 @@ def facet_batch(c: Ctx) -> None:
     f = c.uploaded()
     ct = c.content_type
     if ct is None:
-        _say("nothing classified — run with --only content_types --only facet_batch")
+        _say("nothing classified, run with --only content_types --only facet_batch")
         return
 
     # Only `ct`: classifying a sibling from the same tree is a 400 by design.
@@ -450,7 +450,7 @@ def facet_filters(c: Ctx) -> None:
     ws = c.workspace()
     ct = c.content_type
     if ct is None:
-        _say("nothing classified — run with --only content_types --only facet_filters")
+        _say("nothing classified, run with --only content_types --only facet_filters")
         return
     query = c.search_query or _topic(c)
 

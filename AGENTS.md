@@ -372,6 +372,10 @@ models no facet fields locally.
   dicts are still accepted alongside `FacetAction`, so the escape hatch is what the
   two surfaces share. `ContentType.batch` was deliberately left untouched: it is
   shipped public API and retyping its return would break `r["status"]` for everyone.
+  `FacetAction` is the one curated model with **`extra="forbid"`**: `ignore` suits
+  read models (drop response noise), but on a write model it would silently drop a
+  misspelled field from the body, so a typo raises instead (a test pins it). Unmodelled
+  fields go through a raw dict.
 - **Naming split.** The `FacetAction` constructors carry the **SDK's** method names
   (`classify`/`unclassify`/`set_attribute`/`clear_attribute`) so a batch is a
   mechanical transcription of the one-by-one calls it replaces; `FacetActionType`

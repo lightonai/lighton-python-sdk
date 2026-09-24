@@ -963,9 +963,8 @@ print([r["status"] for r in results])   # [201, 201]
 ```
 
 This is the taxonomy-side sibling of
-[`batch_facets()`](#many-writes-in-one-request), with the same fail-fast behavior
-and the same 50-action cap. The entries stay raw dicts here because the taxonomy
-spans five different action shapes (`adopt` takes a path list, `define_content_type`
+[`batch_facets()`](#many-writes-in-one-request). The entries stay raw dicts here
+because the taxonomy spans five different action shapes (`adopt` takes a path list, `define_content_type`
 takes code/label/parent, `define_attribute` takes seven fields), whereas a file
 facet action has exactly one shape, which is what `FacetAction` models.
 
