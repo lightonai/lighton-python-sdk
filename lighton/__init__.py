@@ -3,11 +3,20 @@ from importlib.metadata import version
 from lighton._client import LightOn
 from lighton.apikey import ApiKey, ApiKeyScope
 from lighton.batch import BatchIngest, BatchIngestJob, BatchProgress, FailedIngest
-from lighton.content_type import Attribute, ContentType, Facet, Template
+from lighton.content_type import (
+    MAX_FACET_ACTIONS,
+    Attribute,
+    ContentType,
+    Facet,
+    FacetAction,
+    FacetResult,
+    Template,
+)
 from lighton.enums import (
     AttributeType,
     DownloadPurpose,
     ExecMode,
+    FacetActionType,
     FileStatus,
     JobStatus,
     RelevanceScoring,
@@ -54,12 +63,16 @@ __all__ = [
     "ExternalMetadata",
     "ExtractJob",
     "Facet",
+    "FacetAction",
+    "FacetActionType",
+    "FacetResult",
     "FailedIngest",
     "File",
     "FileStatus",
     "JobStatus",
     "LightOn",
     "LightOnConfiguration",
+    "MAX_FACET_ACTIONS",
     "ParseJob",
     "RelevanceScoring",
     "ReprocessLevel",

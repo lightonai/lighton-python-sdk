@@ -40,8 +40,10 @@ from lighton import (
     DownloadPurpose,
     ExecMode,
     ExternalMetadata,
+    FacetAction,
     File,
     LightOn,
+    MAX_FACET_ACTIONS,
     RelevanceScoring,
     Role,
     SearchMode,
@@ -52,7 +54,7 @@ from lighton import (
     Workspace,
     wait_all,
 )
-from lighton.exceptions import NotFoundError
+from lighton.exceptions import LightOnAPIError, NotFoundError
 
 DOCS_DIR = Path(__file__).parent / "documents"
 JOB_TIMEOUT = 300.0
@@ -386,6 +388,60 @@ def _sample(attr: Attribute) -> object:
             return attr.choices[0] if attr.type == "select" else [attr.choices[0]]
         case _:
             return None
+
+
+@step
+def facet_batch(c: Ctx) -> None:
+    """facets/batch: many writes in one request, the fail-fast index, the 50 cap."""
+    f = c.uploaded()
+    ct = c.content_type
+    if ct is None:
+        _say("nothing classified — run with --only content_types --only facet_batch")
+        return
+
+    # Only `ct`: classifying a sibling from the same tree is a 400 by design.
+    actions: list[FacetAction | dict[str, object]] = [FacetAction.classify(ct)]
+    attr = next((a for a in ct.attributes if _sample(a) is not None), None)
+    if attr is not None:
+        actions += [
+            FacetAction.set_attribute(ct, attr.name, _sample(attr)),
+            FacetAction.clear_attribute(ct, attr.name),
+            # restore: facet_filters (the next step) filters on this value
+            FacetAction.set_attribute(ct, attr.name, _sample(attr)),
+        ]
+
+    results = f.batch_facets(actions)
+    assert len(results) == len(actions), (
+        f"{len(results)} result(s) for {len(actions)} action(s)"
+    )
+    assert all(r.status < 300 for r in results), (
+        f"batch reported {[r.status for r in results]}"
+    )
+    _say(f"{len(actions)} action(s) in one request → {[r.status for r in results]}")
+
+    # A domain error fails fast and names the offender; what came before it sticks.
+    try:
+        f.batch_facets(
+            [FacetAction.classify(ct), FacetAction.classify(f"no-such-{c.stamp}")]
+        )
+    except LightOnAPIError as e:
+        assert e.index == 1, f"expected index 1, got {e.index}"
+        _say(f"fail-fast reported index {e.index}")
+    else:
+        raise AssertionError("an unknown content type should have failed the batch")
+
+    assert any(x.path == ct.path for x in f.facets()), (
+        "the committed prefix did not stick"
+    )
+
+    assert not f.batch_facets([]), "an empty batch should not have hit the API"
+
+    try:
+        f.batch_facets([FacetAction.classify(ct)] * (MAX_FACET_ACTIONS + 1))
+    except ValueError:
+        _say(f"over {MAX_FACET_ACTIONS} actions: refused client-side, no round trip")
+    else:
+        raise AssertionError(f"{MAX_FACET_ACTIONS + 1} actions should be refused")
 
 
 @step

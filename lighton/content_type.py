@@ -7,7 +7,8 @@ nested tree, not a paginated flat list.
 
 `Facet` is a content type *assigned to a file* together with the file's attribute
 values on it (see `File.classify()` / `File.facets()`). `Attribute` is the shared
-name/type/value shape used by both.
+name/type/value shape used by both. `FacetAction`/`FacetResult` are the write and
+result shapes of `File.batch_facets()`.
 """
 
 from __future__ import annotations
@@ -16,15 +17,18 @@ from __future__ import annotations
 from builtins import list as _list
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from lighton.enums import AttributeType
+from lighton.enums import AttributeType, FacetActionType
 from lighton.utils import _compact, _path
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
 
 _BASE = "/api/v3/content-types"
+
+MAX_FACET_ACTIONS = 50
+"""Actions per `File.batch_facets()` call, the API's cap. Split a longer job yourself."""
 
 
 class Attribute(BaseModel):
@@ -317,6 +321,158 @@ class Facet(BaseModel):
     label: str = Field(description="Human-readable content-type label.")
     attributes: _list[Attribute] = Field(
         default_factory=list, description="Attribute values set on the file."
+    )
+
+
+class FacetAction(BaseModel):
+    """One classification write, applied by `File.batch_facets()`.
+
+    Build these with the constructors, not the fields: each takes the same
+    arguments in the same order as the `File` method of the same name, so a batch
+    is a transcription of the single-action calls it replaces.
+
+        doc.batch_facets([
+            FacetAction.classify(nda),
+            FacetAction.set_attribute(nda, "jurisdiction", "FR"),
+        ])
+
+    Nothing is sent until the list reaches a file, so one list applies to many.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    action: FacetActionType = Field(
+        description="The write to perform, the API's verb (see FacetActionType)."
+    )
+    content_type_path: str = Field(
+        description="Content type the action applies to, e.g. legal:contract:nda."
+    )
+    attribute_name: str | None = Field(
+        None,
+        description="Attribute identifier in snake_case; required by the value verbs.",
+    )
+    value: Any = Field(
+        None,
+        description=(
+            "Value for set_attribute; shape follows the attribute type (string, "
+            "number, date 'YYYY-MM-DD', bool, or list[str] for multi-select)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _value_actions_need_an_attribute(self) -> FacetAction:
+        """The API 422s a value verb with no attribute_name; refuse it locally."""
+        value_verbs = (FacetActionType.set_value, FacetActionType.clear_value)
+        if self.action in value_verbs and not self.attribute_name:
+            raise ValueError(f"{self.action} needs an attribute_name")
+        return self
+
+    @classmethod
+    def classify(cls, content_type: ContentType | str) -> FacetAction:
+        """Assign a content type, the batch form of `File.classify()`.
+
+        Args:
+            content_type: The content type to assign (object or path string).
+
+        Returns:
+            The action, unsent.
+        """
+        return cls(
+            action=FacetActionType.classify, content_type_path=_path(content_type)
+        )
+
+    @classmethod
+    def unclassify(cls, content_type: ContentType | str) -> FacetAction:
+        """Remove a content-type assignment, the batch form of `File.unclassify()`.
+
+        Args:
+            content_type: The content type to unassign (object or path string).
+
+        Returns:
+            The action, unsent.
+        """
+        return cls(
+            action=FacetActionType.unclassify, content_type_path=_path(content_type)
+        )
+
+    @classmethod
+    def set_attribute(
+        cls, content_type: ContentType | str, name: str, value: Any
+    ) -> FacetAction:
+        """Set an attribute value, the batch form of `File.set_attribute()`.
+
+        Args:
+            content_type: The assigned content type (object or path string).
+            name: Attribute identifier (snake_case).
+            value: The value; shape depends on the attribute type (string, number,
+                date "YYYY-MM-DD", bool, or list[str] for multi-select).
+
+        Returns:
+            The action, unsent.
+        """
+        return cls(
+            action=FacetActionType.set_value,
+            content_type_path=_path(content_type),
+            attribute_name=name,
+            value=value,
+        )
+
+    @classmethod
+    def clear_attribute(cls, content_type: ContentType | str, name: str) -> FacetAction:
+        """Clear an attribute value, the batch form of `File.clear_attribute()`.
+
+        Args:
+            content_type: The assigned content type (object or path string).
+            name: Attribute identifier to clear.
+
+        Returns:
+            The action, unsent.
+        """
+        return cls(
+            action=FacetActionType.clear_value,
+            content_type_path=_path(content_type),
+            attribute_name=name,
+        )
+
+    def _body(self) -> dict[str, Any]:
+        # The one place that knows the wire field names: the single-action methods
+        # on File post exactly this too, so single and batch can't drift.
+        body: dict[str, Any] = {
+            "action": self.action,
+            "content_type_path": self.content_type_path,
+        }
+        if self.attribute_name is not None:
+            body["attribute_name"] = self.attribute_name
+        if self.action == FacetActionType.set_value:
+            body["value"] = self.value  # sent even when None, the server decides
+        return body
+
+
+class FacetResult(BaseModel):
+    """What one action in a `File.batch_facets()` returned, in request order.
+
+    Every result you receive succeeded: the endpoint fails fast, so a failing
+    action raises (see `LightOnAPIError.index`) and no results come back at all. A
+    returned list is therefore always complete and in order, so `results[i]` is the
+    outcome of `actions[i]`.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: int = Field(
+        description=(
+            "Per-action status: 201 created, 200 already applied/updated, 204 for "
+            "the removals (unclassify, clear_attribute)."
+        )
+    )
+    data: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "What the action returned, None for the 204 verbs. classify gives "
+            "{content_type_path, label}; set_attribute gives {name, value, "
+            "content_type_path, label}. Left a raw dict: it differs per verb, so "
+            "there is no one model to validate it into."
+        ),
     )
 
 

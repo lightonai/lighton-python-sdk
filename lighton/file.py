@@ -19,18 +19,23 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import Field
 
 from lighton._active_record import _ActiveRecord
-from lighton.content_type import Facet
+from lighton.content_type import (
+    MAX_FACET_ACTIONS,
+    Facet,
+    FacetAction,
+    FacetResult,
+)
 from lighton.enums import DownloadPurpose, FileStatus, ReprocessLevel
 from lighton.exceptions import LightOnError
 from lighton.tag import resolve_ids
 from lighton.types.api import Page
 from lighton.types.file import ExternalMetadata, Thumbnail
-from lighton.utils import _compact, _ids, _path
+from lighton.utils import _compact, _ids
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
@@ -453,12 +458,10 @@ class File(_ActiveRecord):
         return self
 
     # --- content-type classification (facets) ------------------------------
-    def _facet(self, action: str, content_type: ContentType | str, **extra: object):
-        return self._api(
-            "POST",
-            f"{_BASE}/{self.id}/facets",
-            json={"action": action, "content_type_path": _path(content_type), **extra},
-        )
+    def _facet(self, action: FacetAction):
+        # FacetAction._body() is the single wire encoder, shared with batch_facets,
+        # so the single-action and batch bodies cannot drift apart.
+        return self._api("POST", f"{_BASE}/{self.id}/facets", json=action._body())
 
     def classify(self, content_type: ContentType | str) -> File:
         """Assign a content type to this file (ContentType object or path string).
@@ -472,7 +475,7 @@ class File(_ActiveRecord):
         Raises:
             ValueError: If this file has not been created/retrieved yet.
         """
-        self._facet("classify", content_type)
+        self._facet(FacetAction.classify(content_type))
         return self
 
     def unclassify(self, content_type: ContentType | str) -> File:
@@ -484,7 +487,7 @@ class File(_ActiveRecord):
         Returns:
             `self`.
         """
-        self._facet("unclassify", content_type)
+        self._facet(FacetAction.unclassify(content_type))
         return self
 
     def set_attribute(
@@ -501,7 +504,7 @@ class File(_ActiveRecord):
         Returns:
             `self`.
         """
-        self._facet("set_value", content_type, attribute_name=name, value=value)
+        self._facet(FacetAction.set_attribute(content_type, name, value))
         return self
 
     def clear_attribute(self, content_type: ContentType | str, name: str) -> File:
@@ -514,8 +517,63 @@ class File(_ActiveRecord):
         Returns:
             `self`.
         """
-        self._facet("clear_value", content_type, attribute_name=name)
+        self._facet(FacetAction.clear_attribute(content_type, name))
         return self
+
+    def batch_facets(
+        self, actions: Sequence[FacetAction | dict[str, Any]]
+    ) -> _list[FacetResult]:
+        """Apply up to 50 classification writes in one request (POST /files/<id>/facets/batch).
+
+        The batch form of classify/unclassify/set_attribute/clear_attribute. Build
+        the list with `FacetAction`, whose constructors take the same arguments as
+        those methods, so a batch is a transcription of the calls it replaces:
+
+            doc.batch_facets([
+                FacetAction.classify("legal:contract:nda"),
+                FacetAction.set_attribute("legal:contract:nda", "jurisdiction", "FR"),
+            ])
+
+        The list is inert until it gets here, so the same one applies to many
+        files. Beyond saving round trips, the document is reindexed once per batch
+        instead of once per action, which is the real win on a full classification.
+
+        **Not transactional.** Field-level mistakes are caught up front, so a
+        malformed action applies nothing. A domain error (unknown content type,
+        setting a value before classifying, a sibling conflict) stops at that
+        action: everything before it is already applied, and the raised error
+        carries its 0-based position on `.index`. Every action is idempotent, so
+        correct that one and resend the whole list.
+
+        Args:
+            actions: The actions, in order, at most 50. `FacetAction` objects, or
+                raw action bodies as dicts for a verb the SDK doesn't model yet
+                (mix freely). Empty is a local no-op. A longer job is yours to
+                split: chunking here would forfeit the single reindex and report
+                an index relative to a batch you never wrote.
+
+        Returns:
+            One FacetResult per action, in the order sent, so `results[i]` belongs
+            to `actions[i]`. Only ever complete: a failure raises instead.
+
+        Raises:
+            ValueError: If this file has not been created/retrieved yet, or more
+                than 50 actions are passed (refused here to save the round trip).
+            LightOnAPIError: If an action fails. `.index` is the one that did, and
+                the actions before it are already applied.
+        """
+        if not actions:
+            return []
+        if len(actions) > MAX_FACET_ACTIONS:
+            raise ValueError(
+                f"a batch takes at most {MAX_FACET_ACTIONS} actions, got "
+                f"{len(actions)}; send them {MAX_FACET_ACTIONS} at a time"
+            )
+        bodies = [a._body() if isinstance(a, FacetAction) else a for a in actions]
+        data = self._api(
+            "POST", f"{_BASE}/{self.id}/facets/batch", json={"actions": bodies}
+        )
+        return [FacetResult.model_validate(r) for r in data["results"]]
 
     def facets(self) -> _list[Facet]:
         """List this file's assigned content types and their attribute values.
