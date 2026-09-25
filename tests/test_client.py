@@ -66,6 +66,26 @@ def test_error_mapping(status, expected):
     assert excinfo.value.status_code == status
 
 
+def test_api_error_has_no_index_outside_a_batch():
+    """Single-action requests never carry one, which is what makes `index` readable."""
+    client = make_client(lambda req: httpx.Response(404, json={"detail": "nope"}))
+    with pytest.raises(exc.NotFoundError) as excinfo:
+        client.ask("q")
+    assert excinfo.value.index is None
+    assert "action" not in str(excinfo.value)
+
+
+def test_api_error_carries_the_batch_action_index():
+    """Index 0 must survive: it is a real position, not a falsy sentinel."""
+    client = make_client(
+        lambda req: httpx.Response(400, json={"detail": "unknown type", "index": 0})
+    )
+    with pytest.raises(exc.LightOnAPIError) as excinfo:
+        client.ask("q")
+    assert excinfo.value.index == 0
+    assert "(action 0)" in str(excinfo.value)
+
+
 def test_rate_limit_exposes_retry_after():
     client = make_client(
         lambda req: httpx.Response(

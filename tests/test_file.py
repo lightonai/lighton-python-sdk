@@ -10,8 +10,12 @@ import json
 from urllib.parse import parse_qs
 
 from lighton import (
+    MAX_FACET_ACTIONS,
+    ContentType,
     DownloadPurpose,
     ExternalMetadata,
+    FacetAction,
+    FacetActionType,
     File,
     FileStatus,
     LightOn,
@@ -291,7 +295,6 @@ def test_get_by_name_requires_a_persisted_workspace():
 def test_classify_and_attributes_post_actions(tmp_path):
     doc = tmp_path / "a.txt"
     doc.write_text("x")
-    from lighton import ContentType
 
     bodies = []
 
@@ -324,6 +327,214 @@ def test_classify_and_attributes_post_actions(tmp_path):
         },
         {"action": "unclassify", "content_type_path": "legal:contract:nda"},
     ]
+
+
+def _facet_file(handler) -> File:
+    """A persisted File bound to a mocked client, for the facet write tests."""
+    f = File(id=7, workspace_id=3)
+    f._client = _make_client(handler)
+    return f
+
+
+def _no_request(request: httpx.Request) -> httpx.Response:
+    raise AssertionError(f"no request should be made, got {request.url}")
+
+
+def test_batch_facets_posts_every_action_in_one_request():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200, json={"results": [{"status": 201, "data": None}] * 4}
+        )
+
+    f = _facet_file(handler)
+    # ContentType object and bare path string both accepted, as everywhere else
+    ct = ContentType(path="legal:contract:nda", code="nda", label="NDA")
+    f.batch_facets(
+        [
+            FacetAction.classify(ct),
+            FacetAction.set_attribute(
+                "legal:contract:nda", "jurisdiction", ["FR", "DE"]
+            ),
+            FacetAction.set_attribute("legal:contract:nda", "signed", True),
+            FacetAction.clear_attribute(ct, "draft_note"),
+        ]
+    )
+
+    assert len(requests) == 1, "a batch must be exactly one round trip"
+    assert requests[0].url.path == "/api/v3/files/7/facets/batch"
+    assert json.loads(requests[0].content) == {
+        "actions": [
+            {"action": "classify", "content_type_path": "legal:contract:nda"},
+            {
+                "action": "set_value",
+                "content_type_path": "legal:contract:nda",
+                "attribute_name": "jurisdiction",
+                "value": ["FR", "DE"],
+            },
+            {
+                "action": "set_value",
+                "content_type_path": "legal:contract:nda",
+                "attribute_name": "signed",
+                "value": True,
+            },
+            {
+                "action": "clear_value",
+                "content_type_path": "legal:contract:nda",
+                "attribute_name": "draft_note",
+            },
+        ]
+    }
+
+
+def test_batch_facets_sends_the_same_bodies_as_the_single_action_methods():
+    """FacetAction._body() is the one wire encoder, so the two paths can't drift."""
+    single, batched = [], []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if request.url.path.endswith("/facets/batch"):
+            batched.extend(body["actions"])
+            return httpx.Response(
+                200, json={"results": [{"status": 200, "data": None}] * 4}
+            )
+        single.append(body)
+        return httpx.Response(200, json={})
+
+    ct = "legal:contract:nda"
+    f = _facet_file(handler)
+    f.classify(ct)
+    f.set_attribute(ct, "jurisdiction", "FR")
+    f.clear_attribute(ct, "jurisdiction")
+    f.unclassify(ct)
+    f.batch_facets(
+        [
+            FacetAction.classify(ct),
+            FacetAction.set_attribute(ct, "jurisdiction", "FR"),
+            FacetAction.clear_attribute(ct, "jurisdiction"),
+            FacetAction.unclassify(ct),
+        ]
+    )
+
+    assert single == batched
+
+
+def test_batch_facets_parses_results_in_order():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "status": 201,
+                        "data": {
+                            "content_type_path": "legal:contract:nda",
+                            "label": "NDA",
+                        },
+                    },
+                    {"status": 204, "data": None},
+                    {
+                        "status": 200,
+                        "data": {"name": "jurisdiction", "value": "FR"},
+                    },
+                ]
+            },
+        )
+
+    results = _facet_file(handler).batch_facets(
+        [
+            FacetAction.classify("legal:contract:nda"),
+            FacetAction.clear_attribute("legal:contract:nda", "draft_note"),
+            FacetAction.set_attribute("legal:contract:nda", "jurisdiction", "FR"),
+        ]
+    )
+
+    assert [r.status for r in results] == [201, 204, 200]
+    assert results[1].data is None, "the 204 verbs carry no data"
+    assert results[2].data == {"name": "jurisdiction", "value": "FR"}
+
+
+def test_batch_facets_refuses_more_than_fifty_actions():
+    action = FacetAction.classify("legal:contract:nda")
+
+    with pytest.raises(ValueError, match="50"):
+        _facet_file(_no_request).batch_facets([action] * (MAX_FACET_ACTIONS + 1))
+
+    # and the boundary itself is accepted: an off-by-one here is the plausible bug
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"results": [{"status": 200, "data": None}] * MAX_FACET_ACTIONS}
+        )
+
+    assert (
+        len(_facet_file(handler).batch_facets([action] * MAX_FACET_ACTIONS))
+        == MAX_FACET_ACTIONS
+    )
+
+
+def test_batch_facets_is_a_local_no_op_when_empty():
+    assert _facet_file(_no_request).batch_facets([]) == []
+
+
+def test_batch_facets_passes_raw_dicts_through():
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent["body"] = json.loads(request.content)
+        return httpx.Response(
+            200, json={"results": [{"status": 200, "data": None}] * 2}
+        )
+
+    raw = {"action": "some_future_verb", "content_type_path": "legal", "extra": 1}
+    _facet_file(handler).batch_facets([FacetAction.classify("legal"), raw])
+
+    assert sent["body"]["actions"][1] == raw, "a raw dict must reach the wire untouched"
+
+
+def test_batch_facets_reports_the_failing_action_index():
+    """`index` rides on the status-mapped class, so `except NotFoundError` still works."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "unknown content type", "index": 2})
+
+    actions = [
+        FacetAction.classify("legal:contract:nda"),
+        FacetAction.set_attribute("legal:contract:nda", "jurisdiction", "FR"),
+        FacetAction.classify("nope:not-a-type"),
+    ]
+    with pytest.raises(NotFoundError) as excinfo:
+        _facet_file(handler).batch_facets(actions)
+
+    assert excinfo.value.index == 2
+    assert "action 2" in str(excinfo.value), "the position belongs in the message too"
+    # which is what makes the offender addressable, and the prefix already applied
+    assert actions[excinfo.value.index].content_type_path == "nope:not-a-type"
+
+
+def test_facet_action_rejects_a_value_action_without_an_attribute_name():
+    # pydantic's ValidationError subclasses ValueError; refused before any request
+    with pytest.raises(ValueError, match="attribute_name"):
+        FacetAction(
+            action=FacetActionType.set_value, content_type_path="legal:contract:nda"
+        )
+
+
+def test_facet_action_rejects_a_misspelled_field():
+    # a write model: a typo must not silently vanish from the request body
+    with pytest.raises(ValueError, match="atribute_name"):
+        FacetAction(
+            action=FacetActionType.clear_value,
+            content_type_path="legal:contract:nda",
+            attribute_name="jurisdiction",
+            atribute_name="typo",  # ty: ignore[unknown-argument]
+        )
+
+
+def test_batch_facets_requires_a_persisted_file():
+    with pytest.raises(ValueError):
+        File(workspace_id=3).batch_facets([FacetAction.classify("legal")])
 
 
 def test_facets_parses_assigned_content_types(tmp_path):

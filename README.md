@@ -849,6 +849,70 @@ doc.clear_attribute("legal:contract:nda", "jurisdiction")
 doc.unclassify("legal:contract:nda")
 ```
 
+Doing several of these at once? See
+[Many writes in one request](#many-writes-in-one-request).
+
+### Many writes in one request
+
+Classifying a document is rarely one call: it's the `classify`, then one write per
+attribute. `batch_facets()` sends up to 50 of them in a **single request**, which
+also reindexes the document once instead of once per action, and that is the part
+that actually costs time. Build the list with `FacetAction`, whose constructors
+take the same arguments as the methods above, so a batch is a transcription of the
+calls it replaces:
+
+```python
+from lighton import FacetAction, File
+
+doc = File.get_by_name(client, "nda-2026.pdf", workspace=42)[0]
+
+results = doc.batch_facets([
+    FacetAction.classify("legal:contract:nda"),
+    FacetAction.set_attribute("legal:contract:nda", "jurisdiction", "FR"),
+    FacetAction.set_attribute("legal:contract:nda", "signed_on", "2026-07-01"),
+    FacetAction.set_attribute("legal:contract:nda", "signed", True),
+])
+print([r.status for r in results])   # [201, 201, 201, 201]
+```
+
+The list is inert until it reaches a file, so the same one applies to a whole
+corpus:
+
+```python
+actions = [
+    FacetAction.classify("legal:contract:nda"),
+    FacetAction.set_attribute("legal:contract:nda", "jurisdiction", "FR"),
+]
+for doc in File.list(client, workspace_id=42, extension="pdf"):
+    doc.batch_facets(actions)
+```
+
+You get one `FacetResult` per action, in the order sent, so `results[i]` belongs to
+`actions[i]`. Each carries a `status` (201 created, 200 already applied, 204 for
+`unclassify`/`clear_attribute`) and `data`, which is `None` for those 204 actions.
+
+**When one action fails.** The batch is not transactional. A malformed action is
+caught up front and nothing runs, but a *domain* error (an unknown content type,
+setting a value before classifying, a sibling conflict) stops at that action and
+leaves everything before it applied. The error carries the 0-based position, so
+the offender is addressable, and every action is idempotent, so the fix is to
+correct it and resend the whole list:
+
+```python
+from lighton.exceptions import LightOnAPIError
+
+try:
+    doc.batch_facets(actions)
+except LightOnAPIError as e:
+    print("failed at action", e.index, e.body["detail"])
+    print("already applied:", actions[:e.index])
+```
+
+`index` is `None` on any non-batch error. Past 50 actions `batch_facets()` raises a
+`ValueError` before the request goes out: split the list yourself rather than have
+the SDK guess where to cut, since chunking would restore the per-chunk reindex the
+endpoint exists to avoid.
+
 ### Building the taxonomy
 
 Starting from nothing? Adopt a starter tree from the catalog:
@@ -897,6 +961,12 @@ results = ContentType.batch(client, [
 ])
 print([r["status"] for r in results])   # [201, 201]
 ```
+
+This is the taxonomy-side sibling of
+[`batch_facets()`](#many-writes-in-one-request). The entries stay raw dicts here
+because the taxonomy spans five different action shapes (`adopt` takes a path list, `define_content_type`
+takes code/label/parent, `define_attribute` takes seven fields), whereas a file
+facet action has exactly one shape, which is what `FacetAction` models.
 
 ## API keys
 

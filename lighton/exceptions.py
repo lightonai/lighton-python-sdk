@@ -35,12 +35,22 @@ class StreamError(LightOnError):
 
 
 class LightOnAPIError(LightOnError):
-    """The API returned a non-2xx response."""
+    """The API returned a non-2xx response.
+
+    `index` is set only on a **batch** endpoint failure: the 0-based position of
+    the action that failed. Batch endpoints validate every action's fields up
+    front (a field-level 422 executes nothing), then run in order and stop at the
+    first domain error, so the actions before `index` are already applied and the
+    one at `index` is not. Every action is idempotent, so the fix is to correct
+    that one and resend the whole list. None for a single-action request, which
+    never carries an index.
+    """
 
     def __init__(self, message: str, *, status_code: int, body: Any = None) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.body = body
+        self.index: int | None = _index(body)
 
 
 class AuthenticationError(LightOnAPIError):
@@ -133,6 +143,9 @@ def from_response(response: httpx.Response) -> LightOnAPIError:
     message = f"{response.status_code} {response.reason_phrase}"
     if detail:
         message = f"{message}: {detail}"
+    index = _index(body)
+    if index is not None:
+        message = f"{message} (action {index})"
     if cls is RateLimitError:
         return RateLimitError(
             message,
@@ -161,6 +174,15 @@ def _retry_after(response: httpx.Response) -> float | None:
         return float(raw) if raw is not None else None
     except ValueError:
         return None
+
+
+def _index(body: Any) -> int | None:
+    """0-based position of the failing action inside a batch, or None.
+
+    `isinstance(value, int)` rather than truthiness: index 0 is a real answer.
+    """
+    value = body.get("index") if isinstance(body, dict) else None
+    return value if isinstance(value, int) else None
 
 
 def _timestamp(raw: Any) -> datetime | None:

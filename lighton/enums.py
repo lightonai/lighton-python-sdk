@@ -48,6 +48,21 @@ class AttributeType(StrEnum):
     rich_text = "rich-text"
 
 
+class FacetActionType(StrEnum):
+    """The wire verb in a file-facet action (`File.batch_facets`).
+
+    `set_value`/`clear_value` are the API's names for what `File.set_attribute()`
+    and `File.clear_attribute()` do. The `FacetAction` constructors keep the SDK's
+    names so a batch reads like the single-action calls it replaces; this enum
+    keeps the API's, which is what goes over the wire.
+    """
+
+    classify = "classify"
+    unclassify = "unclassify"
+    set_value = "set_value"
+    clear_value = "clear_value"
+
+
 class ReprocessLevel(StrEnum):
     """Reprocessing level queued on a File (`pending_reprocess`), `update` = replacement."""
 

@@ -22,7 +22,7 @@ lighton/
   workspace.py       # Workspace, active-record, lives at root
   apikey.py          # ApiKey / ApiKeyScope, active-record, lives at root
   tag.py             # Tag, active-record (list/create/delete only; no single GET)
-  content_type.py    # ContentType/Facet/Attribute, content-type taxonomy + file facets
+  content_type.py    # ContentType/Facet/Attribute/FacetAction/FacetResult, taxonomy + file facets
   file.py            # File, active-record + wait_all(); upload = ingestion
   batch.py           # ingest_many() batch upload behavior: BatchIngestJob (threads/poll)
   job.py             # ParseJob/ExtractJob, client-bound async handles you poll()
@@ -152,6 +152,16 @@ parsed), `ServerError` (5xx), and `MaintenanceError`.
   payload stays on `.body`. A 503 **without** the marker stays a plain `ServerError`
   (pinned by a test). Still not retried: 5xx never is, and a maintenance window outlasts
   any cooldown worth sleeping through.
+- **`LightOnAPIError.index`** is the 0-based position of the failing action inside a
+  batch request, `None` otherwise. Parsed in the **base `__init__`** by `_index()`
+  (sibling of `_retry_after`/`_timestamp`), so every subclass inherits it through its
+  `super().__init__` and `from_response` stays the single construction point; the
+  position is also appended to the message (`... (action 3)`) so a bare traceback
+  names the offender. Not a `BatchActionError` subclass, because the API sends
+  `index` on **400/403/404/422 alike**: a body-keyed class would either break
+  `except NotFoundError` for batch callers or fork four ways for one integer, and
+  `MaintenanceError` stays the *one* body-keyed mapping. `_index()` tests
+  `isinstance(value, int)` rather than truthiness, since index 0 is a real answer.
 
 ## Resource management: active-record
 
@@ -349,8 +359,56 @@ use `_ActiveRecord.list`.
 `File` classification (all via `POST /files/<id>/facets` with an `action`): `classify`/
 `unclassify` (assign/remove a content type, T2), `set_attribute`/`clear_attribute` (an
 attribute value under an assigned type, T3), each accepting a `ContentType` or a path
-string (one `_facet(action, ct, **extra)` helper builds the body). `facets()` GETs the
-file's assigned types as `list[Facet]`. Like tags, File models no facet fields locally.
+string. `facets()` GETs the file's assigned types as `list[Facet]`. Like tags, File
+models no facet fields locally.
+
+- **`batch_facets(actions)`** is the batch sibling (POST `/files/<id>/facets/batch`,
+  max **50**), and unlike `ContentType.batch` it is **typed both ways**. That
+  divergence is the point, not an oversight: a taxonomy action spans five different
+  shapes (`adopt` takes a path list, `define_content_type` code/label/parent,
+  `define_attribute` seven fields), so modelling it means five models or one wide
+  model whose valid fields depend on the action; a file-facet action has exactly
+  **one** shape (four fields, four verbs), which `FacetAction` models cleanly. Raw
+  dicts are still accepted alongside `FacetAction`, so the escape hatch is what the
+  two surfaces share. `ContentType.batch` was deliberately left untouched: it is
+  shipped public API and retyping its return would break `r["status"]` for everyone.
+  `FacetAction` is the one curated model with **`extra="forbid"`**: `ignore` suits
+  read models (drop response noise), but on a write model it would silently drop a
+  misspelled field from the body, so a typo raises instead (a test pins it). Unmodelled
+  fields go through a raw dict.
+- **Naming split.** The `FacetAction` constructors carry the **SDK's** method names
+  (`classify`/`unclassify`/`set_attribute`/`clear_attribute`) so a batch is a
+  mechanical transcription of the one-by-one calls it replaces; `FacetActionType`
+  (enums.py, its full domain is documented, mirrors the generated
+  `FileFacetActionRequestActionEnum`) and the wire carry the **API's**
+  (`set_value`/`clear_value`). The enum exists partly to make that mapping
+  discoverable. Method name is `batch_facets`, not `facets_batch`: every write on
+  `File` is verb-first, and bare `batch` is unusable because `Workspace`/`batch.py`
+  already own a batch *ingest* concept.
+- **One wire encoder.** `FacetAction._body()` is the single place that knows the
+  body field names, and `_facet` now takes a `FacetAction`, so the four single-action
+  methods and the batch cannot drift; a test pins single-action bodies equal to batch
+  bodies. `FacetAction`/`FacetResult`/`MAX_FACET_ACTIONS` live in `content_type.py`
+  next to `Facet`/`Attribute` (the `Template` precedent for taxonomy-adjacent data
+  models); `types/` would invert the dependency by pulling `ContentType` down into it.
+- **The 50 cap raises a `ValueError` client-side**, the same trade as
+  `define_attribute`'s missing-`choices` check, and empty is a local no-op (the
+  `tag`/`untag`/`delete_many` convention). It is deliberately **not chunked**: the
+  endpoint fails fast at the offending action and commits everything before it, so
+  chunking would both scatter that boundary (the reported `index` would be relative
+  to a batch the caller never wrote) and forfeit the single BM25 reindex that is the
+  whole reason the endpoint exists.
+- **`FacetResult` is curated, not the generated `BatchResultItem`**: the generated
+  name is anonymous and can't document which status belongs to which verb. Its `data`
+  stays a raw dict for the reason `ContentType.batch` already gives (a classification
+  for `classify`, an attribute for `set_value`, null for the 204 verbs, so no one
+  model fits), but the *envelope* is uniform, which is what `FacetResult` buys. No
+  back-reference to the action: results only come back on success, complete and in
+  order, so `results[i]` is `actions[i]` by construction.
+- **Partial commit, unlike `delete_many`.** `/files/bulk-delete` is all-or-nothing
+  server-side, so it raises and there is no per-item report to give. This endpoint
+  commits the prefix before the failure and does **not** return those results, so the
+  *position* is the payload, and it rides on the exception (`LightOnAPIError.index`).
 
 If adding new resources, subclass `_ActiveRecord`: set `_base`/`_resource`, declare the
 field schema (narrow `id`), and add `create()`/`save()`. Everything else is inherited.
