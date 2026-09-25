@@ -48,6 +48,23 @@ class AttributeType(StrEnum):
     rich_text = "rich-text"
 
 
+class ContentTypeActionType(StrEnum):
+    """The wire verb in a taxonomy action (`ContentType.batch`).
+
+    `define_content_type`/`undefine_content_type` are the API's names for what
+    `ContentType.define()` and `ContentType.undefine()` do. The
+    `ContentTypeAction` constructors keep the SDK's names so a batch reads like
+    the single-action calls it replaces; this enum keeps the API's, which is what
+    goes over the wire.
+    """
+
+    adopt = "adopt"
+    define_content_type = "define_content_type"
+    undefine_content_type = "undefine_content_type"
+    define_attribute = "define_attribute"
+    undefine_attribute = "undefine_attribute"
+
+
 class FacetActionType(StrEnum):
     """The wire verb in a file-facet action (`File.batch_facets`).
 
