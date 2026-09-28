@@ -26,6 +26,7 @@ from pydantic import Field
 from lighton._active_record import _ActiveRecord
 from lighton.content_type import (
     MAX_FACET_ACTIONS,
+    ContentTypeRef,
     Facet,
     FacetAction,
     FacetResult,
@@ -39,7 +40,6 @@ from lighton.utils import _compact, _ids
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
-    from lighton.content_type import ContentType
     from lighton.tag import Tag
     from lighton.workspace import Workspace
 
@@ -463,8 +463,8 @@ class File(_ActiveRecord):
         # so the single-action and batch bodies cannot drift apart.
         return self._api("POST", f"{_BASE}/{self.id}/facets", json=action._body())
 
-    def classify(self, content_type: ContentType | str) -> File:
-        """Assign a content type to this file (ContentType object or path string).
+    def classify(self, content_type: ContentTypeRef) -> File:
+        """Assign a content type to this file (node, scored hit, or path string).
 
         Args:
             content_type: The content type to assign, e.g. "legal:contract:nda".
@@ -478,7 +478,7 @@ class File(_ActiveRecord):
         self._facet(FacetAction.classify(content_type))
         return self
 
-    def unclassify(self, content_type: ContentType | str) -> File:
+    def unclassify(self, content_type: ContentTypeRef) -> File:
         """Remove a content-type assignment from this file.
 
         Args:
@@ -491,7 +491,7 @@ class File(_ActiveRecord):
         return self
 
     def set_attribute(
-        self, content_type: ContentType | str, name: str, value: object
+        self, content_type: ContentTypeRef, name: str, value: object
     ) -> File:
         """Set an attribute value under an assigned content type.
 
@@ -507,7 +507,7 @@ class File(_ActiveRecord):
         self._facet(FacetAction.set_attribute(content_type, name, value))
         return self
 
-    def clear_attribute(self, content_type: ContentType | str, name: str) -> File:
+    def clear_attribute(self, content_type: ContentTypeRef, name: str) -> File:
         """Clear an attribute value under an assigned content type.
 
         Args:

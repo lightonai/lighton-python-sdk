@@ -10,6 +10,14 @@ values on it (see `File.classify()` / `File.facets()`). `Attribute` is the share
 name/type/value shape used by both. `ContentTypeAction`/`ContentTypeResult` and
 `FacetAction`/`FacetResult` are the write and result shapes of the two batch
 endpoints, `ContentType.batch()` and `File.batch_facets()`.
+
+`FacetScope` is what `ContentType.scope()` resolves: the taxonomy ranked against a
+natural-language query, plus the `content_type`/`attribute` filters to narrow a
+search with. `ScopeGroup`/`ScopedContentType`/`ScopeCompletion` are its parts, and
+`resolve_scope()` is the coercion helper `ask`/`search` call for their `scope=`.
+
+`ContentTypeRef` is what every "name a content type" parameter takes across the
+SDK, here and on `File`/`ask`/`search`.
 """
 
 from __future__ import annotations
@@ -17,12 +25,17 @@ from __future__ import annotations
 # The list() classmethod shadows builtin list in annotations (class scope).
 from builtins import list as _list
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from lighton.enums import AttributeType, ContentTypeActionType, FacetActionType
-from lighton.utils import _compact, _path
+from lighton.enums import (
+    AttributeType,
+    ContentTypeActionType,
+    FacetActionType,
+    RelevanceScoring,
+)
+from lighton.utils import _compact, _path, _paths
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
@@ -108,6 +121,71 @@ class ContentType(BaseModel):
         data = client._request("GET", _BASE, params=params)
         return [cls.model_validate(n) for n in data["content_types"]]
 
+    @classmethod
+    def scope(
+        cls,
+        client: LightOn,
+        query: str | None = None,
+        *,
+        max_results: int | None = None,
+        threshold: float | None = None,
+        model: str | None = None,
+        relevance_scoring: Literal[RelevanceScoring.none] | None = None,
+    ) -> FacetScope:
+        """Rank the taxonomy against a question (POST /content-types/scope).
+
+        Turns free text into the `content_type`/`attribute` filters `ask` and
+        `search` take, so a caller doesn't have to know the taxonomy by heart.
+        Three modes, by argument:
+
+        - **prompt** (no `model`): scored content types plus `prompt_context`, a
+          ready-made prompt for your own LLM. No `completion`.
+        - **completion** (`model=`): the API runs that LLM itself and returns the
+          inferred scope in `completion`, attribute filters included.
+        - **catalog** (`relevance_scoring=RelevanceScoring.none`): every content
+          type at score 0, `max_results`/`threshold` ignored. Pair it with `model`
+          to infer over the whole taxonomy rather than the query-relevant slice.
+
+        Nothing is stored: this is one stateless inference call.
+
+        Args:
+            client: The client to query with.
+            query: The natural-language question (max 2000 chars). Omit it for the
+                full schema catalog, which is what you want for a system prompt.
+            max_results: Content types to return (1-100; server default 20).
+            threshold: Score above which `has_signal` goes true (server default
+                1.8). Pass 0 to disable the gate.
+            model: Technical name of the LLM that infers the scope. Omit to get
+                `prompt_context` and run your own. On `ask`, note this is a
+                different model from its answer-generation `model`.
+            relevance_scoring: Only `RelevanceScoring.none` is accepted here (skip
+                scoring, return the whole catalog); omit for the default scoring.
+
+        Returns:
+            The resolved scope. Feed it to `ask`/`search` as `scope=`, or read
+            `filters()` yourself.
+
+        Raises:
+            ValueError: If `relevance_scoring` is anything but
+                `RelevanceScoring.none`, which the API rejects anyway, caught here
+                to save the round trip.
+        """
+        if relevance_scoring is not None and relevance_scoring != RelevanceScoring.none:
+            raise ValueError(
+                f"scope() only accepts relevance_scoring=RelevanceScoring.none, "
+                f"got {relevance_scoring}"
+            )
+        body = _compact(
+            query=query,
+            max_results=max_results,
+            threshold=threshold,
+            model=model,
+            relevance_scoring=relevance_scoring,
+        )
+        return FacetScope.model_validate(
+            client._request("POST", f"{_BASE}/scope", json=body)
+        )
+
     # --- taxonomy writes ---------------------------------------------------
     # Mirrors File._facet: one helper posts the action, the named methods just
     # build it. Every action is idempotent server-side.
@@ -153,7 +231,7 @@ class ContentType(BaseModel):
         code: str,
         label: str,
         *,
-        parent: ContentType | str | None = None,
+        parent: ContentTypeRef | None = None,
         description: str | None = None,
         inherit_attributes: bool | None = None,
     ) -> ContentType:
@@ -189,7 +267,7 @@ class ContentType(BaseModel):
         )
 
     @classmethod
-    def undefine(cls, client: LightOn, content_type: ContentType | str) -> None:
+    def undefine(cls, client: LightOn, content_type: ContentTypeRef) -> None:
         """Delete a node **and cascade its whole subtree**.
 
         Args:
@@ -205,7 +283,7 @@ class ContentType(BaseModel):
     def define_attribute(
         cls,
         client: LightOn,
-        content_type: ContentType | str,
+        content_type: ContentTypeRef,
         name: str,
         attribute_type: AttributeType | str,
         *,
@@ -253,7 +331,7 @@ class ContentType(BaseModel):
 
     @classmethod
     def undefine_attribute(
-        cls, client: LightOn, content_type: ContentType | str, name: str
+        cls, client: LightOn, content_type: ContentTypeRef, name: str
     ) -> None:
         """Remove an attribute column from a node.
 
@@ -481,7 +559,7 @@ class ContentTypeAction(BaseModel):
         code: str,
         label: str,
         *,
-        parent: ContentType | str | None = None,
+        parent: ContentTypeRef | None = None,
         description: str | None = None,
         inherit_attributes: bool | None = None,
     ) -> ContentTypeAction:
@@ -508,7 +586,7 @@ class ContentTypeAction(BaseModel):
         )
 
     @classmethod
-    def undefine(cls, content_type: ContentType | str) -> ContentTypeAction:
+    def undefine(cls, content_type: ContentTypeRef) -> ContentTypeAction:
         """Delete a node and its subtree, the batch form of `ContentType.undefine()`.
 
         Args:
@@ -525,7 +603,7 @@ class ContentTypeAction(BaseModel):
     @classmethod
     def define_attribute(
         cls,
-        content_type: ContentType | str,
+        content_type: ContentTypeRef,
         name: str,
         attribute_type: AttributeType | str,
         *,
@@ -566,7 +644,7 @@ class ContentTypeAction(BaseModel):
 
     @classmethod
     def undefine_attribute(
-        cls, content_type: ContentType | str, name: str
+        cls, content_type: ContentTypeRef, name: str
     ) -> ContentTypeAction:
         """Remove an attribute, the batch form of `ContentType.undefine_attribute()`.
 
@@ -618,6 +696,165 @@ class ContentTypeResult(BaseModel):
             "there is no one model to validate it into."
         ),
     )
+
+
+class ScopedContentType(BaseModel):
+    """One content type scored against a query by `ContentType.scope()`.
+
+    It carries `.path`, so it is a `ContentTypeRef`: `search(content_type=[hit])`
+    and `doc.classify(hit)` both work, and type-check.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    path: str = Field(description="Full taxonomy path, e.g. legal:contract:nda.")
+    label: str = Field(description="Human-readable label.")
+    root: str = Field(description="Path of the tree this node belongs to.")
+    score: float = Field(
+        description="Relevance to the query; 0 when scoring was skipped."
+    )
+    chunk_count: int = Field(description="Chunks matching the query under this type.")
+    doc_count: int = Field(description="Documents classified under this type.")
+    attributes: _list[Attribute] = Field(
+        default_factory=list,
+        description="Attribute definitions on this type; `value` is always None here.",
+    )
+
+
+ContentTypeRef = ContentType | ScopedContentType | str
+"""Anything that names a content type: a taxonomy node, a scored hit, or a path.
+
+Exactly what `_path()`/`_paths()` coerce, so every parameter that takes a content
+type takes all three. Declared once here rather than spelled out per signature:
+it is one rule (*we accept a `.path`*), and `ScopedContentType` was added to it
+without touching the fifteen signatures that state it.
+"""
+
+
+class ScopeGroup(BaseModel):
+    """The scored content types of one taxonomy tree, as `scope()` groups them."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    root: str = Field(description="Path of the tree's root node.")
+    root_label: str = Field(description="Human-readable label of the root.")
+    max_score: float = Field(description="Best score among this group's types.")
+    content_types: _list[ScopedContentType] = Field(
+        default_factory=list, description="The tree's scored content types."
+    )
+
+
+class ScopeCompletion(BaseModel):
+    """The LLM's inferred scope, present only when `scope()` was given a `model`.
+
+    Its `content_type`/`attribute` are already normalized to the paths and filter
+    syntax `ask`/`search` expect, which is what `FacetScope.filters()` hands back.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    content_type: str | None = Field(
+        None, description="Inferred content-type path, None when it inferred none."
+    )
+    attribute: _list[str] = Field(
+        default_factory=list,
+        description='Inferred attribute filters, e.g. ["filing_date:>=2023-01-01"].',
+    )
+    raw_output: str = Field("", description="The model's unparsed output.")
+    normalized: bool = Field(
+        False, description="Whether a label had to be mapped onto its attribute name."
+    )
+    warnings: _list[str] = Field(
+        default_factory=list,
+        description=(
+            "Why inference degraded, empty in the happy path. A failed model call "
+            "lands here rather than failing the request."
+        ),
+    )
+
+
+class FacetScope(BaseModel):
+    """A search scope resolved from a question, what `ContentType.scope()` returns."""
+
+    # populate_by_name so `completion` works as a field name too, not just the
+    # `scope_completion` the wire sends.
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    has_signal: bool = Field(
+        description="Whether any content type scored above `threshold`."
+    )
+    groups: _list[ScopeGroup] = Field(
+        default_factory=list, description="Scored content types, grouped by tree."
+    )
+    prompt_context: str | None = Field(
+        None,
+        description=(
+            "LLM-ready description of the matched schema. Feed it to your own model "
+            "when you resolve the scope yourself (no `model=`)."
+        ),
+    )
+    prompt_version: str | None = Field(
+        None,
+        description=(
+            "Hash of the prompt template and the data behind it, for reproducing a "
+            "run. Same value means the same prompt was built."
+        ),
+    )
+    completion: ScopeCompletion | None = Field(
+        None,
+        alias="scope_completion",
+        description="The LLM's inferred scope; None unless `scope()` got a `model`.",
+    )
+
+    @property
+    def content_types(self) -> _list[ScopedContentType]:
+        """Every scored content type across the groups, best score first.
+
+        Returns:
+            The flattened, score-ordered hits. `groups` keeps the server's grouping
+            if you want it by tree.
+        """
+        hits = [ct for group in self.groups for ct in group.content_types]
+        return sorted(hits, key=lambda ct: ct.score, reverse=True)
+
+    def filters(self) -> dict[str, _list[str]]:
+        """The `content_type`/`attribute` filters this scope narrows to.
+
+        Passing the scope itself, `client.search(query, scope=scope)`, applies
+        these for you; read them here to see (or log) what a scope would narrow
+        to before spending the search on it. Pass them by keyword rather than
+        splatting the dict, which a type checker can't match to the signature:
+
+            client.search(query, content_type=scope.filters().get("content_type"))
+
+        Precedence:
+
+        1. A `completion` that inferred anything wins. That is an explicit answer
+           from the model, and `has_signal` (a retrieval-score gate) must not veto it.
+        2. Otherwise, no signal means no narrowing, so `{}`.
+        3. Otherwise the scored paths, which is retrieval-only narrowing. **Every**
+           scored path, not just the best ones: `threshold` gates `has_signal` for
+           the whole scope and isn't echoed per hit, so there is nothing to cut on
+           here. Narrowing to the top few is `scope(..., max_results=3)` at resolve
+           time. No attribute filters either: inferring those needs a `model`.
+
+        Returns:
+            A dict holding `content_type` and/or `attribute`, empty when the scope
+            says to narrow nothing. A key is absent rather than empty, so a
+            missing filter reads the same as one never asked for.
+        """
+        done = self.completion
+        if done is not None and (done.content_type or done.attribute):
+            narrowed: dict[str, _list[str]] = {}
+            if done.content_type:
+                narrowed["content_type"] = [done.content_type]
+            if done.attribute:
+                narrowed["attribute"] = _list(done.attribute)
+            return narrowed
+        if not self.has_signal:
+            return {}
+        paths = [ct.path for ct in self.content_types]
+        return {"content_type": paths} if paths else {}
 
 
 class Facet(BaseModel):
@@ -678,7 +915,7 @@ class FacetAction(BaseModel):
         return self
 
     @classmethod
-    def classify(cls, content_type: ContentType | str) -> FacetAction:
+    def classify(cls, content_type: ContentTypeRef) -> FacetAction:
         """Assign a content type, the batch form of `File.classify()`.
 
         Args:
@@ -692,7 +929,7 @@ class FacetAction(BaseModel):
         )
 
     @classmethod
-    def unclassify(cls, content_type: ContentType | str) -> FacetAction:
+    def unclassify(cls, content_type: ContentTypeRef) -> FacetAction:
         """Remove a content-type assignment, the batch form of `File.unclassify()`.
 
         Args:
@@ -707,7 +944,7 @@ class FacetAction(BaseModel):
 
     @classmethod
     def set_attribute(
-        cls, content_type: ContentType | str, name: str, value: Any
+        cls, content_type: ContentTypeRef, name: str, value: Any
     ) -> FacetAction:
         """Set an attribute value, the batch form of `File.set_attribute()`.
 
@@ -728,7 +965,7 @@ class FacetAction(BaseModel):
         )
 
     @classmethod
-    def clear_attribute(cls, content_type: ContentType | str, name: str) -> FacetAction:
+    def clear_attribute(cls, content_type: ContentTypeRef, name: str) -> FacetAction:
         """Clear an attribute value, the batch form of `File.clear_attribute()`.
 
         Args:
@@ -784,6 +1021,53 @@ class FacetResult(BaseModel):
             "there is no one model to validate it into."
         ),
     )
+
+
+def resolve_scope(
+    client: LightOn,
+    query: str,
+    scope: FacetScope | bool,
+    content_type: _list[ContentTypeRef] | None,
+    attribute: _list[str] | None,
+) -> tuple[_list[str] | None, _list[str] | None]:
+    """The `content_type`/`attribute` a verb should send, applying `scope=` if asked.
+
+    The one place that knows what `scope=` means, so `ask` and `search` can't
+    drift (same reasoning as `FacetAction._body()`). `True` resolves the scope from
+    the verb's own query with no `model`, which is retrieval-only narrowing and
+    costs one extra request but no LLM call. It takes the endpoint's defaults, so
+    it narrows to as many as 20 content types, weak matches included: a loose net,
+    not a precise one. Tighter narrowing is `ContentType.scope(client, query,
+    max_results=3)` passed in, and a `FacetScope` you resolved yourself is applied
+    as-is, attribute filters included.
+
+    Args:
+        client: The client to resolve with, used only when `scope` is True.
+        query: The verb's query, what an unresolved scope is inferred from.
+        scope: False for no scoping, True to resolve one, or an already-resolved
+            `FacetScope`.
+        content_type: The verb's explicit `content_type` argument.
+        attribute: The verb's explicit `attribute` argument.
+
+    Returns:
+        The `(content_type_paths, attribute)` pair to put in the request body.
+
+    Raises:
+        ValueError: If `scope` is combined with an explicit `content_type` or
+            `attribute`. Merging them silently would hide which filters ran.
+    """
+    if not scope:  # False, and a FacetScope is always truthy
+        return _paths(content_type), attribute
+    if content_type is not None or attribute is not None:
+        raise ValueError(
+            "scope= replaces content_type=/attribute=; pass the scope or the "
+            "explicit filters, not both"
+        )
+    resolved = (
+        scope if isinstance(scope, FacetScope) else ContentType.scope(client, query)
+    )
+    narrowed = resolved.filters()
+    return narrowed.get("content_type"), narrowed.get("attribute")
 
 
 ContentType.model_rebuild()  # resolve the self-referential `children` forward ref

@@ -10,6 +10,7 @@ import lighton._client
 from lighton import (
     ContentType,
     DoneEvent,
+    FacetScope,
     LightOn,
     LightOnConfiguration,
     SourcesEvent,
@@ -308,3 +309,127 @@ def test_stream_ignores_unknown_events_for_forward_compatibility():
 )
 def test_sse_parser_edge_cases(wire, expected):
     assert list(_sse(iter(wire))) == expected
+
+
+# --- scope= ----------------------------------------------------------------
+
+SCOPE_BODY = {
+    "has_signal": True,
+    "groups": [
+        {
+            "root": "patent",
+            "root_label": "Patent",
+            "max_score": 1.85,
+            "content_types": [
+                {
+                    "path": "patent:electricity",
+                    "label": "Electricity",
+                    "root": "patent",
+                    "score": 1.85,
+                    "chunk_count": 15,
+                    "doc_count": 18000,
+                    "attributes": [],
+                }
+            ],
+        }
+    ],
+    "prompt_context": "ctx",
+}
+
+
+def test_ask_scope_true_resolves_then_filters():
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.url.path, json.loads(req.content)))
+        if req.url.path == "/api/v3/content-types/scope":
+            return httpx.Response(200, json=SCOPE_BODY)
+        return httpx.Response(200, json={"answer": "a", "results": []})
+
+    make_client(handler).ask("why did it fail", scope=True)
+
+    assert [path for path, _ in seen] == [
+        "/api/v3/content-types/scope",
+        "/api/v3/ask",
+    ]
+    assert seen[1][1] == {
+        "query": "why did it fail",
+        "content_type": ["patent:electricity"],
+    }
+
+
+def test_ask_scope_and_model_are_different_models():
+    """scope= infers the filters, model= generates the answer."""
+    seen = []
+    scope = FacetScope.model_validate(
+        {
+            **SCOPE_BODY,
+            "scope_completion": {
+                "content_type": "patent:electricity",
+                "attribute": ["filing_date:>=2023-01-01"],
+            },
+        }
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json={"answer": "a", "results": []})
+
+    make_client(handler).ask("q", scope=scope, model="answer-model")
+
+    assert len(seen) == 1
+    assert seen[0] == {
+        "query": "q",
+        "content_type": ["patent:electricity"],
+        "attribute": ["filing_date:>=2023-01-01"],
+        "model": "answer-model",
+    }
+
+
+def test_ask_scope_composes_with_streaming():
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.url.path, json.loads(req.content)))
+        if req.url.path == "/api/v3/content-types/scope":
+            return httpx.Response(200, json=SCOPE_BODY)
+        return httpx.Response(200, content=SSE)
+
+    events = list(make_client(handler).ask("q", scope=True, stream=True))
+
+    assert [path for path, _ in seen] == [
+        "/api/v3/content-types/scope",
+        "/api/v3/ask",
+    ]
+    assert seen[1][1] == {
+        "query": "q",
+        "content_type": ["patent:electricity"],
+        "stream": True,
+    }
+    assert [type(e) for e in events] == [
+        SourcesEvent,
+        TokenEvent,
+        TokenEvent,
+        DoneEvent,
+    ]
+
+
+def test_ask_scope_narrows_nothing_without_a_signal():
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(req.content))
+        if req.url.path == "/api/v3/content-types/scope":
+            return httpx.Response(200, json={**SCOPE_BODY, "has_signal": False})
+        return httpx.Response(200, json={"answer": "a", "results": []})
+
+    make_client(handler).ask("q", scope=True)
+    assert seen[1] == {"query": "q"}  # same body as a plain ask
+
+
+def test_ask_refuses_a_scope_alongside_explicit_filters():
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"no request should be made, got {req.url}")
+
+    with pytest.raises(ValueError, match="not both"):
+        make_client(handler).ask("q", scope=True, content_type=["legal"])

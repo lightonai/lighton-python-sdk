@@ -104,6 +104,7 @@ class Ctx:
     stamp: str
     ask_query: str | None
     search_query: str | None
+    scope_model: str | None = None  # names the LLM the `scope` step infers with
     ws: Workspace | None = None
     file: File | None = None
     tag: Tag | None = None
@@ -457,6 +458,74 @@ def facet_batch(c: Ctx) -> None:
         _say(f"over {MAX_FACET_ACTIONS} actions: refused client-side, no round trip")
     else:
         raise AssertionError(f"{MAX_FACET_ACTIONS + 1} actions should be refused")
+
+
+@step
+def scope(c: Ctx) -> None:
+    """content-types/scope: prompt mode → catalog mode → search(scope=True).
+
+    Scores whatever taxonomy the account already has; run it after the
+    `content_types` step if you want something guaranteed to be there.
+    """
+    ws = c.workspace()
+    query = c.search_query or _topic(c)
+
+    # Prompt mode: no model, so no completion, just the prompt to run yourself.
+    resolved = ContentType.scope(c.client, query)
+    _say(
+        f"scope({query!r}) → has_signal={resolved.has_signal}, "
+        f"{len(resolved.content_types)} content type(s)"
+    )
+    assert resolved.completion is None, (
+        "no model= was passed, so there is no completion"
+    )
+    if resolved.content_types:
+        # prompt_context describes the types that scored, so it's only guaranteed
+        # once something did — an empty taxonomy is a skipped step, not a bug.
+        assert resolved.prompt_context, "prompt mode must return a prompt_context"
+    else:
+        _say(
+            "nothing scored — run with --only content_types --only scope",
+            typer.colors.YELLOW,
+        )
+    for hit in resolved.content_types[:3]:
+        _say(f"  {hit.score:.2f}  {hit.path}  ({hit.doc_count} doc(s))")
+
+    if resolved.content_types:
+        # A scored hit is a ContentTypeRef: it filters without unwrapping .path.
+        best = resolved.content_types[0]
+        got = c.client.search(
+            query, workspaces=[ws], content_type=[best], max_results=5
+        ).results
+        _say(f"search(content_type=[<hit {best.path}>]) → {len(got)} chunk(s)")
+
+    # Catalog mode: no query at all, the whole taxonomy for a system prompt.
+    catalog = ContentType.scope(c.client)
+    _say(f"scope() with no query → {len(catalog.content_types)} content type(s)")
+
+    # scope=True on search: resolve first, then narrow by what it scored.
+    hits = c.client.search(query, workspaces=[ws], scope=True, max_results=5).results
+    _say(f"search(scope=True) → {len(hits)} chunk(s)")
+
+    try:
+        c.client.search(query, scope=True, content_type=["legal"])
+    except ValueError:
+        _say("scope= with an explicit content_type=: refused client-side")
+    else:
+        raise AssertionError("scope= alongside content_type= should be refused")
+
+    if not c.scope_model:
+        _say("completion mode: skipped, pass --scope-model <model> to exercise it")
+        return
+
+    # Completion mode: the API runs the LLM and hands back the filters.
+    inferred = ContentType.scope(c.client, query, model=c.scope_model)
+    assert inferred.completion is not None, "model= must return a completion"
+    _say(f"scope(model={c.scope_model!r}) → {inferred.filters()}")
+    if inferred.completion.warnings:
+        _say(f"  warnings: {inferred.completion.warnings}", typer.colors.YELLOW)
+    got = c.client.search(query, workspaces=[ws], scope=inferred, max_results=5).results
+    _say(f"search(scope=<resolved>) → {len(got)} chunk(s)")
 
 
 @step
@@ -815,6 +884,11 @@ def main(
         "--search-query",
         help="Query for `search` [default: a phrase from the first document].",
     ),
+    scope_model: str = typer.Option(
+        None,
+        "--scope-model",
+        help="LLM for the `scope` step's completion mode [default: skip it].",
+    ),
     keep: bool = typer.Option(
         False, "--keep", help="Don't delete the workspace/tag/key afterwards."
     ),
@@ -856,7 +930,7 @@ def main(
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     failures: list[str] = []
     with LightOn() as client:  # reads LIGHTON_API_KEY
-        c = Ctx(client, documents, stamp, ask_query, search_query)
+        c = Ctx(client, documents, stamp, ask_query, search_query, scope_model)
         try:
             for name in chosen:
                 typer.secho(f"\n▶ {name}", fg=typer.colors.CYAN, bold=True)

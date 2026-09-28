@@ -7,14 +7,19 @@ import pytest
 
 from lighton import (
     MAX_CONTENT_TYPE_ACTIONS,
+    Attribute,
     AttributeType,
     ContentType,
     ContentTypeAction,
     ContentTypeActionType,
+    FacetAction,
+    File,
     LightOn,
     LightOnConfiguration,
+    RelevanceScoring,
 )
 from lighton.exceptions import NotFoundError
+from lighton.utils import _paths
 
 
 def make_client(handler) -> LightOn:
@@ -24,6 +29,10 @@ def make_client(handler) -> LightOn:
             transport=httpx.MockTransport(handler), max_requests_per_minute=None
         ),
     )
+
+
+def _no_request(request: httpx.Request) -> httpx.Response:
+    raise AssertionError(f"no request should be made, got {request.url}")
 
 
 def test_list_parses_tree_and_sends_params():
@@ -456,3 +465,291 @@ def test_a_false_flag_is_sent_not_dropped():
     )
     assert sent["body"]["actions"][0]["inherit_attributes"] is False
     assert sent["body"]["actions"][1]["required"] is False
+
+
+# --- ContentType.scope -----------------------------------------------------
+
+
+def _hit(path, score, root="patent", attributes=None):
+    """One entry of a scope group's `content_types`."""
+    return {
+        "path": path,
+        "label": path.rsplit(":", 1)[-1].title(),
+        "root": root,
+        "score": score,
+        "chunk_count": 15,
+        "doc_count": 18000,
+        "attributes": attributes if attributes is not None else [],
+    }
+
+
+def _scope_payload(*, has_signal=True, groups=None, completion=None):
+    """A FacetScopeResponse body, shaped like the documented examples."""
+    payload = {
+        "has_signal": has_signal,
+        "groups": groups
+        if groups is not None
+        else [
+            {
+                "root": "patent",
+                "root_label": "Patent Classification",
+                "max_score": 1.85,
+                "content_types": [_hit("patent:electricity", 1.85)],
+            }
+        ],
+        "prompt_context": "Content types (by relevance):\n  1. Electricity",
+        "prompt_version": "t:a1b2c3d4.d:e5f6a7b8",
+    }
+    if completion is not None:
+        payload["scope_completion"] = completion
+    return payload
+
+
+def test_scope_posts_to_the_scope_path_and_drops_what_you_did_not_set():
+    client, sent = _writer(_scope_payload())
+
+    scope = ContentType.scope(client, "rejected electronics patents")
+
+    assert sent["path"] == "/api/v3/content-types/scope"
+    assert sent["body"] == {"query": "rejected electronics patents"}
+    assert scope.has_signal is True
+    assert scope.prompt_version == "t:a1b2c3d4.d:e5f6a7b8"
+
+
+def test_scope_sends_every_knob_and_an_empty_body_without_one():
+    client, sent = _writer(_scope_payload())
+    ContentType.scope(
+        client,
+        "q",
+        max_results=5,
+        threshold=0,
+        model="mistral-large-latest",
+        relevance_scoring=RelevanceScoring.none,
+    )
+    assert sent["body"] == {
+        "query": "q",
+        "max_results": 5,
+        "threshold": 0,
+        "model": "mistral-large-latest",
+        "relevance_scoring": "none",
+    }
+
+    client, sent = _writer(_scope_payload())
+    ContentType.scope(client)  # no query: the full schema catalog
+    assert sent["body"] == {}
+
+
+def test_scope_parses_attributes_as_typed_definitions():
+    attributes = [
+        {
+            "name": "decision",
+            "label": "Decision",
+            "type": "select",
+            "required": False,
+            "description": "Patent application decision status",
+            "choices": ["Accepted", "Rejected"],
+            "unmodelled": "ignored",  # response noise, extra="ignore"
+        }
+    ]
+    client, _ = _writer(
+        _scope_payload(
+            groups=[
+                {
+                    "root": "patent",
+                    "root_label": "Patent Classification",
+                    "max_score": 1.85,
+                    "content_types": [
+                        _hit("patent:electricity", 1.85, attributes=attributes)
+                    ],
+                }
+            ]
+        )
+    )
+
+    scope = ContentType.scope(client, "q")
+
+    [hit] = scope.groups[0].content_types
+    assert hit.doc_count == 18000
+    [attr] = hit.attributes
+    assert isinstance(attr, Attribute)
+    assert (attr.name, attr.type, attr.choices) == (
+        "decision",
+        "select",
+        ["Accepted", "Rejected"],
+    )
+    assert attr.value is None  # a definition, never a value
+
+
+def test_scope_hits_are_accepted_wherever_a_content_type_is():
+    """A hit is a ContentTypeRef: it reaches the wire as a path, and type-checks.
+
+    Calls the real parameters rather than `_paths()` alone (whose `list[Any]`
+    would swallow a narrowed annotation), so `make type-check` fails if any of
+    them stops accepting a scored hit.
+    """
+    bodies = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(req.content))
+        if req.url.path.endswith("/scope"):
+            return httpx.Response(200, json=_scope_payload())
+        if req.url.path.endswith("/ask"):
+            return httpx.Response(200, json={"answer": "a", "results": []})
+        return httpx.Response(200, json={"results": []})
+
+    client = make_client(handler)
+    hit = ContentType.scope(client, "q").content_types[0]
+
+    assert _paths([hit]) == ["patent:electricity"]
+
+    client.search("q", content_type=[hit])
+    assert bodies[-1]["content_type"] == ["patent:electricity"]
+
+    client.ask("q", content_type=[hit])
+    assert bodies[-1]["content_type"] == ["patent:electricity"]
+
+    doc = File(id=7)
+    doc._client = client
+    doc.classify(hit)
+    assert bodies[-1]["content_type_path"] == "patent:electricity"
+
+    assert FacetAction.classify(hit).content_type_path == "patent:electricity"
+
+
+def test_completion_lands_on_completion_and_drives_the_filters():
+    client, _ = _writer(
+        _scope_payload(
+            completion={
+                "content_type": "patent:electricity",
+                "attribute": ["filing_date:>=2023-01-01", "filing_date:<=2023-03-31"],
+                "raw_output": '{"content_type":"patent:electricity"}',
+                "normalized": False,
+                "warnings": [],
+            }
+        )
+    )
+
+    scope = ContentType.scope(client, "q", model="mistral-large-latest")
+
+    assert scope.completion is not None
+    assert scope.completion.content_type == "patent:electricity"
+    assert scope.filters() == {
+        "content_type": ["patent:electricity"],
+        "attribute": ["filing_date:>=2023-01-01", "filing_date:<=2023-03-31"],
+    }
+
+
+def test_filters_falls_back_to_the_scored_paths_without_a_completion():
+    client, _ = _writer(
+        _scope_payload(
+            groups=[
+                {
+                    "root": "patent",
+                    "root_label": "Patent",
+                    "max_score": 1.85,
+                    "content_types": [
+                        _hit("patent:electricity", 1.85),
+                        _hit("patent:chemistry", 1.2),
+                    ],
+                }
+            ]
+        )
+    )
+
+    scope = ContentType.scope(client, "q")
+
+    assert scope.completion is None
+    # retrieval-only narrowing: content types, never attributes
+    assert scope.filters() == {
+        "content_type": ["patent:electricity", "patent:chemistry"]
+    }
+
+
+def test_filters_narrows_nothing_without_a_signal():
+    client, _ = _writer(_scope_payload(has_signal=False))
+    assert ContentType.scope(client, "q").filters() == {}
+
+
+def test_filters_narrows_nothing_when_a_signal_scored_no_paths():
+    """has_signal true with empty groups: no key rather than content_type=[]."""
+    client, _ = _writer(_scope_payload(groups=[]))
+    assert ContentType.scope(client, "q").filters() == {}
+
+
+def test_a_completion_outranks_a_missing_signal():
+    """has_signal gates the retrieval scores, not an explicit answer from the model."""
+    client, _ = _writer(
+        _scope_payload(
+            has_signal=False,
+            completion={
+                "content_type": "patent:electricity",
+                "attribute": [],
+                "raw_output": "",
+                "normalized": False,
+                "warnings": [],
+            },
+        )
+    )
+
+    scope = ContentType.scope(client, "q", model="m")
+
+    assert scope.filters() == {"content_type": ["patent:electricity"]}
+
+
+def test_an_empty_completion_falls_through_to_the_scores():
+    client, _ = _writer(
+        _scope_payload(
+            completion={
+                "content_type": None,
+                "attribute": [],
+                "raw_output": "",
+                "normalized": False,
+                "warnings": ["model call failed"],
+            }
+        )
+    )
+
+    scope = ContentType.scope(client, "q", model="m")
+
+    assert scope.completion is not None and scope.completion.warnings
+    assert scope.filters() == {"content_type": ["patent:electricity"]}
+
+
+def test_content_types_is_flattened_across_groups_and_score_ordered():
+    client, _ = _writer(
+        _scope_payload(
+            groups=[
+                {
+                    "root": "patent",
+                    "root_label": "Patent",
+                    "max_score": 1.2,
+                    "content_types": [_hit("patent:chemistry", 1.2)],
+                },
+                {
+                    "root": "legal",
+                    "root_label": "Legal",
+                    "max_score": 1.9,
+                    "content_types": [
+                        _hit("legal:nda", 1.9, root="legal"),
+                        _hit("legal:msa", 1.5, root="legal"),
+                    ],
+                },
+            ]
+        )
+    )
+
+    scope = ContentType.scope(client, "q")
+
+    assert [ct.path for ct in scope.content_types] == [
+        "legal:nda",
+        "legal:msa",
+        "patent:chemistry",
+    ]
+    # groups keep the server's order, untouched
+    assert [g.root for g in scope.groups] == ["patent", "legal"]
+
+
+def test_scope_refuses_a_relevance_scoring_the_endpoint_rejects():
+    client = make_client(_no_request)
+    with pytest.raises(ValueError, match="RelevanceScoring.none"):
+        ContentType.scope(client, "q", relevance_scoring=RelevanceScoring.scoring_only)  # ty: ignore[invalid-argument-type]
