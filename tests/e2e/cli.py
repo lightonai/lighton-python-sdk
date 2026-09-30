@@ -36,6 +36,7 @@ from lighton import (
     Attribute,
     AttributeType,
     ContentType,
+    ContentTypeAction,
     DoneEvent,
     DownloadPurpose,
     ExecMode,
@@ -43,6 +44,7 @@ from lighton import (
     FacetAction,
     File,
     LightOn,
+    MAX_CONTENT_TYPE_ACTIONS,
     MAX_FACET_ACTIONS,
     RelevanceScoring,
     Role,
@@ -346,12 +348,8 @@ def _seed_taxonomy(c: Ctx) -> list[ContentType]:
     results = ContentType.batch(
         c.client,
         [
-            {
-                "action": "define_content_type",
-                "parent_path": code,
-                "code": "batched",
-                "label": "Batched",
-            },
+            ContentTypeAction.define("batched", "Batched", parent=code),
+            # a raw dict stays a valid entry, the escape hatch both batches share
             {
                 "action": "define_attribute",
                 "content_type_path": code,
@@ -360,11 +358,28 @@ def _seed_taxonomy(c: Ctx) -> list[ContentType]:
             },
         ],
     )
-    assert all(r["status"] < 300 for r in results), f"batch failed: {results}"
+    assert all(r.status < 300 for r in results), f"batch failed: {results}"
+    assert results[1].data is not None, "define_attribute returns the definition"
     _say(
         f"defined {code} (+child, +batched), attributes {attr.name}/{sel.name}"
-        f"/{results[1]['data']['name']}"
+        f"/{results[1].data['name']}"
     )
+
+    try:
+        ContentType.batch(c.client, [ContentTypeAction.undefine("nope:not-a-type")])
+    except LightOnAPIError as e:
+        assert e.index == 0, f"the failing action's position should be 0, got {e.index}"
+    else:
+        raise AssertionError("an unknown content type should have failed the batch")
+
+    assert not ContentType.batch(c.client, []), "an empty batch should not have hit API"
+    with_too_many = [ContentTypeAction.undefine(code)] * (MAX_CONTENT_TYPE_ACTIONS + 1)
+    try:
+        ContentType.batch(c.client, with_too_many)
+    except ValueError:
+        pass  # refused client-side, no round trip
+    else:
+        raise AssertionError("past the cap the batch should have been refused")
     return ContentType.list(c.client, include_attributes=True)
 
 

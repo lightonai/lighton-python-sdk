@@ -75,19 +75,21 @@ a field whose full domain is known, `workspace_type`/`document_upload_method` st
 - **Async jobs.** `parse`/`extract` take `mode: ExecMode` (default `ExecMode.SYNC`); `ExecMode.ASYNC` (uppercase members, value `"async"`, and lowercase `async` can't be a member name) sends `options={"async": true}`. `ExecMode` lives in `enums.py` (StrEnum, exported). Async returns a **pollable job handle** (`job.py`): `parse(mode=ASYNC)` → `ParseJob`, `extract(mode=ASYNC)` → `ExtractJob`; sync returns the full response model as before. Each verb has two `@overload`s keyed on `mode: Literal[ExecMode.SYNC|ASYNC]` so callers get the exact return type (`ParseResponse` vs `ParseJob`) instead of the union, the impl signature keeps the `ExecMode` default and the `... | ...Job` return. `Job.poll(page=None)` GETs `<path>/<id>`, absorbs the response onto itself in place (mirrors `_ActiveRecord._absorb`), returns self; `.done` (terminal, `completed_at` set) and `.succeeded` (`status == completed`) read state. `_Job` is a hand-written curated model (`extra="ignore"`) holding the shared plumbing + fields; `ParseJob`/`ExtractJob` subclass it ONLY because `result` differs (`ParseResult.pages` vs `ExtractResult.data`, whose optional fields make a union ambiguous), parse also has `error`. The job binds to the client via the `_VerbClient` transport surface (all it needs is `_request`), not a full `LightOn` (keeps the mixin's `self` assignable without a cast). `JobStatus` (enums.py) has only the documented `pending`/`completed`, the API doesn't publish the failure vocab, so it's for call-site comparison (StrEnum, unknown server values compare unequal, never validated onto the field), and the "poll until `.succeeded`, raise once `.done`" pattern keys off `completed_at`, not a failure string. `_Job.wait(timeout=300, poll=2)` is the auto-wait: a `File.wait`-style poll loop (no webhook exists) that returns self once terminal, raises `TimeoutError` past the deadline and `LightOnError` if `not .succeeded` (detail from `error` when the subclass has one, `getattr`, since only `ParseJob` does). The verbs expose it as `wait=False`/`timeout=300.0` (**same pair as `Workspace.ingest`**), declared **only on the ASYNC `@overload`** so `wait=True` without `mode=ASYNC` is a static error *and* a `ValueError` (sync already blocks); the two negative tests carry a `# ty: ignore[no-matching-overload]`. `wait=True` still returns the job (not the sync response model), so the return-type overloads stay two. No `poll` knob on the verbs, callers who need one use `job.wait(poll=...)`.
 - **Taxonomy writes** live on `ContentType` as **classmethods** (it isn't an
   `_ActiveRecord`: the endpoint returns a nested tree, not a paginated flat list, so
-  there is nothing to bind). One `_action()` helper posts `{action, ...}` to
+  there is nothing to bind). One `_action()` helper posts a `ContentTypeAction` to
   `_BASE`, mirroring `File._facet`, and the named methods (`define`/`undefine`/
-  `define_attribute`/`undefine_attribute`/`adopt`) just name their fields; `batch()`
-  posts an `actions` list to `/content-types/batch`. Every action is idempotent, so
+  `define_attribute`/`undefine_attribute`/`adopt`) just build one; `batch()` posts
+  an `actions` list to `/content-types/batch`. Every action is idempotent, so
   `define()` doubles as rename. `undefine` **cascades the subtree**. Node/path
   arguments take a `ContentType` or a path string via `_path()` in `utils.py`, the
   scalar sibling of `_paths()` (`File._facet` was switched onto it too, it had the
   same coercion inlined). `AttributeType` (enums.py) enumerates the documented type
-  vocabulary; `choices` is **required** for select/multi-select and raises a
-  `ValueError` client-side rather than spending a round trip on the API's 422.
-  `batch()` returns the raw `{"status", "data"}` results: `data` is a node for the
-  content-type actions and an attribute for the attribute ones, so there is no one
-  model to validate it into (same reasoning as the `ParseJob`/`ExtractJob` split).
+  vocabulary; `choices` is **required** for select/multi-select and raises client-side
+  rather than spending a round trip on the API's 422 (from the `ContentTypeAction`
+  validator now, so it arrives as the `ValueError` subclass `ValidationError`).
+  `ContentTypeResult.data` stays a raw dict: it's a node for the content-type actions
+  and an attribute for the attribute ones, so there is no one model to validate it
+  into (same reasoning as the `ParseJob`/`ExtractJob` split), but the *envelope* is
+  typed, same as `FacetResult`.
 - **`Template` subclasses `ContentType`** solely to retype `attributes`: the
   templates endpoint hangs the **whole subtree's** attributes off the root as a
   `{path: [Attribute]}` **map**, where a live node carries its own flat list. It
@@ -362,53 +364,74 @@ attribute value under an assigned type, T3), each accepting a `ContentType` or a
 string. `facets()` GETs the file's assigned types as `list[Facet]`. Like tags, File
 models no facet fields locally.
 
-- **`batch_facets(actions)`** is the batch sibling (POST `/files/<id>/facets/batch`,
-  max **50**), and unlike `ContentType.batch` it is **typed both ways**. That
-  divergence is the point, not an oversight: a taxonomy action spans five different
-  shapes (`adopt` takes a path list, `define_content_type` code/label/parent,
-  `define_attribute` seven fields), so modelling it means five models or one wide
-  model whose valid fields depend on the action; a file-facet action has exactly
-  **one** shape (four fields, four verbs), which `FacetAction` models cleanly. Raw
-  dicts are still accepted alongside `FacetAction`, so the escape hatch is what the
-  two surfaces share. `ContentType.batch` was deliberately left untouched: it is
-  shipped public API and retyping its return would break `r["status"]` for everyone.
-  `FacetAction` is the one curated model with **`extra="forbid"`**: `ignore` suits
-  read models (drop response noise), but on a write model it would silently drop a
-  misspelled field from the body, so a typo raises instead (a test pins it). Unmodelled
-  fields go through a raw dict.
-- **Naming split.** The `FacetAction` constructors carry the **SDK's** method names
-  (`classify`/`unclassify`/`set_attribute`/`clear_attribute`) so a batch is a
-  mechanical transcription of the one-by-one calls it replaces; `FacetActionType`
-  (enums.py, its full domain is documented, mirrors the generated
-  `FileFacetActionRequestActionEnum`) and the wire carry the **API's**
-  (`set_value`/`clear_value`). The enum exists partly to make that mapping
-  discoverable. Method name is `batch_facets`, not `facets_batch`: every write on
-  `File` is verb-first, and bare `batch` is unusable because `Workspace`/`batch.py`
-  already own a batch *ingest* concept.
-- **One wire encoder.** `FacetAction._body()` is the single place that knows the
-  body field names, and `_facet` now takes a `FacetAction`, so the four single-action
-  methods and the batch cannot drift; a test pins single-action bodies equal to batch
-  bodies. `FacetAction`/`FacetResult`/`MAX_FACET_ACTIONS` live in `content_type.py`
-  next to `Facet`/`Attribute` (the `Template` precedent for taxonomy-adjacent data
-  models); `types/` would invert the dependency by pulling `ContentType` down into it.
-- **The 50 cap raises a `ValueError` client-side**, the same trade as
+- **Both batch endpoints are typed both ways, and symmetrically.**
+  `File.batch_facets(actions)` (POST `/files/<id>/facets/batch`) and
+  `ContentType.batch(client, actions)` (POST `/content-types/batch`), max **50**
+  each, take `FacetAction`/`ContentTypeAction` and return
+  `FacetResult`/`ContentTypeResult`. The taxonomy side used to stay raw dicts on the
+  grounds that a taxonomy action spans five shapes (`adopt` takes a path list,
+  `define_content_type` code/label/parent, `define_attribute` seven fields) where a
+  file-facet action has exactly one. That was **reversed**: the API itself models the
+  five as *one wide class plus a per-action validator*
+  (`ContentTypeActionRequest`, whose schema says so and names `FileFacetActionRequest`
+  as the same pattern), so the SDK follows, and `ContentTypeAction`'s
+  `@model_validator` enforces the narrow contract per verb exactly as
+  `FacetAction`'s does for the value verbs. The cost was a breaking change,
+  `r["status"]` became `r.status`, taken deliberately rather than carrying a mapping
+  shim that would have made one result model unlike the other. On a wide model the
+  **field descriptions name the verbs each field belongs to**; that is what keeps it
+  readable. Raw dicts are still accepted alongside both action models, so the escape
+  hatch is what the two surfaces share. Both action models are the curated models
+  with **`extra="forbid"`**: `ignore` suits read models (drop response noise), but on
+  a write model it would silently drop a misspelled field from the body, so a typo
+  raises instead (a test pins each). Unmodelled fields go through a raw dict.
+- **Naming split, on both sides.** The constructors carry the **SDK's** method names
+  (`classify`/`unclassify`/`set_attribute`/`clear_attribute`;
+  `adopt`/`define`/`undefine`/`define_attribute`/`undefine_attribute`) so a batch is a
+  mechanical transcription of the one-by-one calls it replaces; `FacetActionType` and
+  `ContentTypeActionType` (enums.py, both domains documented, mirroring the generated
+  `FileFacetActionRequestActionEnum`/`ContentTypeActionRequestActionEnum`) and the
+  wire carry the **API's** (`set_value`/`clear_value`;
+  `define_content_type`/`undefine_content_type`). The enums exist partly to make that
+  mapping discoverable. Method name is `batch_facets`, not `facets_batch`: every write
+  on `File` is verb-first, and bare `batch` is unusable there because
+  `Workspace`/`batch.py` already own a batch *ingest* concept; on `ContentType` it is
+  free, so `batch` it is.
+- **One wire encoder per surface.** `FacetAction._body()` and
+  `ContentTypeAction._body()` are the single places that know the body field names,
+  and `File._facet`/`ContentType._action` take an action object, so the single-action
+  methods and their batch cannot drift; a test on each side pins single-action bodies
+  equal to batch bodies. `ContentTypeAction._body()` is just
+  `model_dump(exclude_none=True)`: it reproduces the `_compact` semantics the named
+  methods used before (unset drops, `False` survives), and no content-type field is
+  meaningfully null on the wire the way `FacetAction.value` is for `set_value`, which
+  is the one reason that sibling hand-lists its fields. All of
+  `ContentTypeAction`/`ContentTypeResult`/`FacetAction`/`FacetResult` and the two
+  `MAX_*_ACTIONS` caps live in `content_type.py` next to `Facet`/`Attribute` (the
+  `Template` precedent for taxonomy-adjacent data models); `types/` would invert the
+  dependency by pulling `ContentType` down into it. Two constants, not one shared 50:
+  they are two endpoints' caps, and a facet-named constant guarding a taxonomy call
+  would be a naming lie.
+- **The 50 caps raise a `ValueError` client-side**, the same trade as
   `define_attribute`'s missing-`choices` check, and empty is a local no-op (the
-  `tag`/`untag`/`delete_many` convention). It is deliberately **not chunked**: the
-  endpoint fails fast at the offending action and commits everything before it, so
-  chunking would both scatter that boundary (the reported `index` would be relative
-  to a batch the caller never wrote) and forfeit the single BM25 reindex that is the
+  `tag`/`untag`/`delete_many` convention). Neither is **chunked**: the endpoints fail
+  fast at the offending action and commit everything before it, so chunking would both
+  scatter that boundary (the reported `index` would be relative to a batch the caller
+  never wrote) and, on the facet side, forfeit the single BM25 reindex that is the
   whole reason the endpoint exists.
-- **`FacetResult` is curated, not the generated `BatchResultItem`**: the generated
-  name is anonymous and can't document which status belongs to which verb. Its `data`
-  stays a raw dict for the reason `ContentType.batch` already gives (a classification
-  for `classify`, an attribute for `set_value`, null for the 204 verbs, so no one
-  model fits), but the *envelope* is uniform, which is what `FacetResult` buys. No
-  back-reference to the action: results only come back on success, complete and in
-  order, so `results[i]` is `actions[i]` by construction.
+- **`FacetResult`/`ContentTypeResult` are curated, not the generated
+  `BatchResultItem`**: the generated name is anonymous and serves both endpoints, so it
+  can't document which status belongs to which verb. `data` stays a raw dict on both
+  (a classification for `classify`, an attribute for `set_value`, a node for
+  `define_content_type`, null for the 204 verbs, so no one model fits), but the
+  *envelope* is uniform, which is what the two result models buy. No back-reference to
+  the action: results only come back on success, complete and in order, so `results[i]`
+  is `actions[i]` by construction.
 - **Partial commit, unlike `delete_many`.** `/files/bulk-delete` is all-or-nothing
-  server-side, so it raises and there is no per-item report to give. This endpoint
-  commits the prefix before the failure and does **not** return those results, so the
-  *position* is the payload, and it rides on the exception (`LightOnAPIError.index`).
+  server-side, so it raises and there is no per-item report to give. Both batch
+  endpoints commit the prefix before the failure and do **not** return those results,
+  so the *position* is the payload, and it rides on the exception
+  (`LightOnAPIError.index`).
 
 If adding new resources, subclass `_ActiveRecord`: set `_base`/`_resource`, declare the
 field schema (narrow `id`), and add `create()`/`save()`. Everything else is inherited.
@@ -470,8 +493,9 @@ throwaway workspace, runs every SDK verb against `tests/e2e/documents/`, and del
 it made. Add a step there when you add a feature. The `facet_filters` step needs a
 classified file, so `content_types` leaves the file classified (with an attribute set)
 the way `tags` leaves it tagged; on a tenant with an empty taxonomy `_seed_taxonomy()`
-defines two throwaway content types straight through `client._request` (the SDK models
-the taxonomy read-only) and registers their teardown.
+builds two throwaway roots through the taxonomy writes themselves (`ContentType.define`/
+`define_attribute`/`batch`, which doubles as their live check) and registers the
+cascading `undefine` teardown.
 - **Tooling**: ruff (lint + format), ty (type check), pytest, all enforced via pre-commit. `ty` has no autofix; it blocks on errors.
 - **uv.lock**: re-stage it after any dependency change before committing, or the ty pre-commit hook (which runs through `uv` and re-resolves) will report a lockfile modification and fail the commit.
 - New deps: prefer stdlib → installed dep → a few lines, before adding anything. Mark deliberate simplifications with `ponytail:` comments.

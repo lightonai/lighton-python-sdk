@@ -4,9 +4,12 @@ from lighton._client import LightOn
 from lighton.apikey import ApiKey, ApiKeyScope
 from lighton.batch import BatchIngest, BatchIngestJob, BatchProgress, FailedIngest
 from lighton.content_type import (
+    MAX_CONTENT_TYPE_ACTIONS,
     MAX_FACET_ACTIONS,
     Attribute,
     ContentType,
+    ContentTypeAction,
+    ContentTypeResult,
     Facet,
     FacetAction,
     FacetResult,
@@ -14,6 +17,7 @@ from lighton.content_type import (
 )
 from lighton.enums import (
     AttributeType,
+    ContentTypeActionType,
     DownloadPurpose,
     ExecMode,
     FacetActionType,
@@ -57,6 +61,9 @@ __all__ = [
     "BatchIngestJob",
     "BatchProgress",
     "ContentType",
+    "ContentTypeAction",
+    "ContentTypeActionType",
+    "ContentTypeResult",
     "DoneEvent",
     "DownloadPurpose",
     "ExecMode",
@@ -72,6 +79,7 @@ __all__ = [
     "JobStatus",
     "LightOn",
     "LightOnConfiguration",
+    "MAX_CONTENT_TYPE_ACTIONS",
     "MAX_FACET_ACTIONS",
     "ParseJob",
     "RelevanceScoring",

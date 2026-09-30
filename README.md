@@ -950,23 +950,43 @@ ContentType.undefine_attribute(client, audit, "fiscal_year")
 ContentType.undefine(client, "compliance")   # also removes compliance:audit-report
 ```
 
-Building a tree is several calls, so `batch()` sends them in one request. Each entry
-is the body a single method would send, and you get one result per action, in order:
+Building a tree is several calls, so `batch()` sends up to 50 of them in a **single
+request**. Build the list with `ContentTypeAction`, whose constructors take the same
+arguments as the methods above, so a batch is a transcription of the calls it
+replaces:
 
 ```python
+from lighton import AttributeType, ContentTypeAction
+
 results = ContentType.batch(client, [
-    {"action": "adopt", "content_types": ["legal"]},
-    {"action": "define_attribute", "content_type_path": "legal",
-     "name": "jurisdiction", "attribute_type": "select", "choices": ["FR", "US"]},
+    ContentTypeAction.adopt(["legal"]),
+    ContentTypeAction.define("compliance", "Compliance"),
+    ContentTypeAction.define("audit-report", "Audit Report", parent="compliance"),
+    ContentTypeAction.define_attribute(
+        "legal", "jurisdiction", AttributeType.select, choices=["FR", "US"]
+    ),
 ])
-print([r["status"] for r in results])   # [201, 201]
+print([r.status for r in results])   # [201, 201, 201, 201]
 ```
 
-This is the taxonomy-side sibling of
-[`batch_facets()`](#many-writes-in-one-request). The entries stay raw dicts here
-because the taxonomy spans five different action shapes (`adopt` takes a path list, `define_content_type`
-takes code/label/parent, `define_attribute` takes seven fields), whereas a file
-facet action has exactly one shape, which is what `FacetAction` models.
+You get one `ContentTypeResult` per action, in the order sent, so `results[i]` belongs
+to `actions[i]`. Each carries a `status` (201 created, 200 already applied) and `data`,
+which is `None` for the 204 removals (`undefine`, `undefine_attribute`) and otherwise a
+node for the content-type verbs or a definition for the attribute ones.
+
+The list is inert until it reaches `batch()`, so the same one seeds many tenants. The
+failure rules are the taxonomy-side copy of
+[`batch_facets()`](#many-writes-in-one-request): not transactional, a domain error stops
+at that action and leaves the ones before it applied, the raised `LightOnAPIError`
+carries the 0-based position on `.index`, every action is idempotent so the fix is to
+correct that one and resend the whole list. Empty is a local no-op, and past 50 actions
+`batch()` raises a `ValueError` before the request goes out.
+
+`ContentTypeAction` is one model covering all five verbs rather than five models, which
+is how the API models it too: the fields are the union of the action shapes and a
+validator enforces the narrow contract per verb, so a `define` without a `label` or a
+`select` without `choices` is refused locally. A raw dict still works as an entry, for a
+verb the SDK does not model yet.
 
 ## API keys
 

@@ -7,25 +7,30 @@ nested tree, not a paginated flat list.
 
 `Facet` is a content type *assigned to a file* together with the file's attribute
 values on it (see `File.classify()` / `File.facets()`). `Attribute` is the shared
-name/type/value shape used by both. `FacetAction`/`FacetResult` are the write and
-result shapes of `File.batch_facets()`.
+name/type/value shape used by both. `ContentTypeAction`/`ContentTypeResult` and
+`FacetAction`/`FacetResult` are the write and result shapes of the two batch
+endpoints, `ContentType.batch()` and `File.batch_facets()`.
 """
 
 from __future__ import annotations
 
 # The list() classmethod shadows builtin list in annotations (class scope).
 from builtins import list as _list
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from lighton.enums import AttributeType, FacetActionType
+from lighton.enums import AttributeType, ContentTypeActionType, FacetActionType
 from lighton.utils import _compact, _path
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
 
 _BASE = "/api/v3/content-types"
+
+MAX_CONTENT_TYPE_ACTIONS = 50
+"""Actions per `ContentType.batch()` call, the API's cap. Split a longer job yourself."""
 
 MAX_FACET_ACTIONS = 50
 """Actions per `File.batch_facets()` call, the API's cap. Split a longer job yourself."""
@@ -105,10 +110,12 @@ class ContentType(BaseModel):
 
     # --- taxonomy writes ---------------------------------------------------
     # Mirrors File._facet: one helper posts the action, the named methods just
-    # name their fields. Every action is idempotent server-side.
+    # build it. Every action is idempotent server-side.
     @classmethod
-    def _action(cls, client: LightOn, action: str, **fields: Any) -> Any:
-        return client._request("POST", _BASE, json=_compact(action=action, **fields))
+    def _action(cls, client: LightOn, action: ContentTypeAction) -> Any:
+        # ContentTypeAction._body() is the single wire encoder, shared with
+        # batch(), so the single-action and batch bodies cannot drift apart.
+        return client._request("POST", _BASE, json=action._body())
 
     @classmethod
     def templates(cls, client: LightOn) -> _list[Template]:
@@ -136,7 +143,7 @@ class ContentType(BaseModel):
         Returns:
             The imported top-level nodes.
         """
-        data = cls._action(client, "adopt", content_types=paths)
+        data = cls._action(client, ContentTypeAction.adopt(paths))
         return [cls.model_validate(n) for n in data["content_types"]]
 
     @classmethod
@@ -171,12 +178,13 @@ class ContentType(BaseModel):
         return cls.model_validate(
             cls._action(
                 client,
-                "define_content_type",
-                code=code,
-                label=label,
-                parent_path=_path(parent) if parent is not None else None,
-                description=description,
-                inherit_attributes=inherit_attributes,
+                ContentTypeAction.define(
+                    code,
+                    label,
+                    parent=parent,
+                    description=description,
+                    inherit_attributes=inherit_attributes,
+                ),
             )
         )
 
@@ -191,9 +199,7 @@ class ContentType(BaseModel):
         Returns:
             None.
         """
-        cls._action(
-            client, "undefine_content_type", content_type_path=_path(content_type)
-        )
+        cls._action(client, ContentTypeAction.undefine(content_type))
 
     @classmethod
     def define_attribute(
@@ -227,23 +233,21 @@ class ContentType(BaseModel):
         Raises:
             ValueError: If a select/multi-select is missing `choices`, which the
                 API rejects with a 422 anyway, caught here to save the round trip.
+                Raised by `ContentTypeAction`, so it arrives as the pydantic
+                `ValidationError` subclass.
         """
-        if (
-            attribute_type in (AttributeType.select, AttributeType.multi_select)
-            and not choices
-        ):
-            raise ValueError(f"{attribute_type} needs choices")
         return Attribute.model_validate(
             cls._action(
                 client,
-                "define_attribute",
-                content_type_path=_path(content_type),
-                name=name,
-                attribute_type=attribute_type,
-                choices=choices,
-                label=label,
-                description=description,
-                required=required,
+                ContentTypeAction.define_attribute(
+                    content_type,
+                    name,
+                    attribute_type,
+                    choices=choices,
+                    label=label,
+                    description=description,
+                    required=required,
+                ),
             )
         )
 
@@ -261,41 +265,63 @@ class ContentType(BaseModel):
         Returns:
             None.
         """
-        cls._action(
-            client,
-            "undefine_attribute",
-            content_type_path=_path(content_type),
-            name=name,
-        )
+        cls._action(client, ContentTypeAction.undefine_attribute(content_type, name))
 
     @classmethod
     def batch(
-        cls, client: LightOn, actions: _list[dict[str, Any]]
-    ) -> _list[dict[str, Any]]:
-        """Apply several taxonomy actions in one request (POST /content-types/batch).
+        cls, client: LightOn, actions: Sequence[ContentTypeAction | dict[str, Any]]
+    ) -> _list[ContentTypeResult]:
+        """Apply up to 50 taxonomy actions in one request (POST /content-types/batch).
 
-        Each entry is the body a single-action method would send, so a tree and
+        The batch form of adopt/define/undefine/define_attribute/
+        undefine_attribute. Build the list with `ContentTypeAction`, whose
+        constructors take the same arguments as those methods, so a whole tree and
         its attributes land together instead of one round trip each:
 
             ContentType.batch(client, [
-                {"action": "adopt", "content_types": ["legal"]},
-                {"action": "define_attribute", "content_type_path": "legal",
-                 "name": "jurisdiction", "attribute_type": "select",
-                 "choices": ["FR", "US"]},
+                ContentTypeAction.adopt(["legal"]),
+                ContentTypeAction.define_attribute(
+                    "legal", "jurisdiction", AttributeType.select,
+                    choices=["FR", "US"],
+                ),
             ])
+
+        The list is inert until it gets here, so the same one seeds many tenants.
+
+        **Not transactional.** Field-level mistakes are caught up front, so a
+        malformed action applies nothing. A domain error (an unknown parent path,
+        a permission denial) stops at that action: everything before it is already
+        applied, and the raised error carries its 0-based position on `.index`.
+        Every action is idempotent, so correct that one and resend the whole list.
 
         Args:
             client: The client to write with.
-            actions: The action bodies, in order.
+            actions: The actions, in order, at most 50. `ContentTypeAction`
+                objects, or raw action bodies as dicts for a verb the SDK doesn't
+                model yet (mix freely). Empty is a local no-op. A longer job is
+                yours to split: chunking here would report an index relative to a
+                batch you never wrote.
 
         Returns:
-            One `{"status": ..., "data": ...}` entry per action, in the same
-            order. `data` is a node for the content-type actions and an attribute
-            for the attribute ones, so it's left as raw dicts rather than guessed
-            into one model.
+            One ContentTypeResult per action, in the order sent, so `results[i]`
+            belongs to `actions[i]`. Only ever complete: a failure raises instead.
+
+        Raises:
+            ValueError: If more than 50 actions are passed (refused here to save
+                the round trip).
+            LightOnAPIError: If an action fails. `.index` is the one that did, and
+                the actions before it are already applied.
         """
-        data = client._request("POST", f"{_BASE}/batch", json={"actions": actions})
-        return data["results"]
+        if not actions:
+            return []
+        if len(actions) > MAX_CONTENT_TYPE_ACTIONS:
+            raise ValueError(
+                f"a batch takes at most {MAX_CONTENT_TYPE_ACTIONS} actions, got "
+                f"{len(actions)}; send them {MAX_CONTENT_TYPE_ACTIONS} at a time"
+            )
+        bodies = [a._body() if isinstance(a, ContentTypeAction) else a for a in actions]
+        data = client._request("POST", f"{_BASE}/batch", json={"actions": bodies})
+        return [ContentTypeResult.model_validate(r) for r in data["results"]]
 
 
 class Template(ContentType):
@@ -309,6 +335,288 @@ class Template(ContentType):
     attributes: dict[str, _list[Attribute]] = Field(  # type: ignore[assignment]
         default_factory=dict,
         description="Attribute definitions per node path, for the whole subtree.",
+    )
+
+
+class ContentTypeAction(BaseModel):
+    """One taxonomy write, applied by `ContentType.batch()`.
+
+    Build these with the constructors, not the fields: each takes the same
+    arguments in the same order as the `ContentType` classmethod of the same name
+    (minus `client`), so a batch is a transcription of the single-action calls.
+
+        ContentType.batch(client, [
+            ContentTypeAction.define("compliance", "Compliance"),
+            ContentTypeAction.define_attribute(
+                "compliance", "owner", AttributeType.text
+            ),
+        ])
+
+    One wide model rather than five, which is how the API models it too
+    (`ContentTypeActionRequest`): the fields are the union of the five action
+    shapes, and a validator enforces the narrow contract per verb. Each field
+    below names the verbs it belongs to.
+
+    Nothing is sent until the list reaches `batch()`, so one list seeds many
+    tenants.
+    """
+
+    # forbid, not ignore: this is a write model, a misspelled field must fail
+    # loudly rather than vanish from the body. Raw dicts are the unmodelled escape.
+    model_config = ConfigDict(extra="forbid")
+
+    action: ContentTypeActionType = Field(
+        description="The write to perform, the API's verb (see ContentTypeActionType)."
+    )
+    content_types: _list[str] | None = Field(
+        None, description="Template root paths to import; adopt only."
+    )
+    parent_path: str | None = Field(
+        None, description="Parent node path; define only, omitted for a root."
+    )
+    code: str | None = Field(
+        None,
+        description="The node's own segment, lowercase with hyphens; define only.",
+    )
+    content_type_path: str | None = Field(
+        None,
+        description=(
+            "Node the action applies to, e.g. legal:contract:nda; every verb but "
+            "adopt and define."
+        ),
+    )
+    label: str | None = Field(
+        None,
+        description=(
+            "Human-readable label, required by define, optional on define_attribute."
+        ),
+    )
+    description: str | None = Field(
+        None, description="Free-text description; define and define_attribute."
+    )
+    inherit_attributes: bool | None = Field(
+        None,
+        description=(
+            "Whether children inherit this node's attributes (server default "
+            "True); define only."
+        ),
+    )
+    name: str | None = Field(
+        None,
+        description=(
+            "Attribute identifier in snake_case; define_attribute and "
+            "undefine_attribute."
+        ),
+    )
+    attribute_type: AttributeType | str | None = Field(
+        None,
+        description=(
+            "AttributeType, or the equivalent string (the API also accepts the "
+            "multi_select/multiselect/rich_text/richtext aliases, which skip the "
+            "local choices check); define_attribute only."
+        ),
+    )
+    required: bool | None = Field(
+        None,
+        description=(
+            "Whether the schema requires a value (server default False); "
+            "define_attribute only."
+        ),
+    )
+    choices: _list[str] | None = Field(
+        None,
+        description=(
+            "Allowed values, **required** for select and multi-select and "
+            "rejected for every other type; define_attribute only."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _each_verb_needs_its_fields(self) -> ContentTypeAction:
+        """Refuse locally what the API would 422: the narrow contract per verb."""
+        needed = {
+            ContentTypeActionType.adopt: ("content_types",),
+            ContentTypeActionType.define_content_type: ("code", "label"),
+            ContentTypeActionType.undefine_content_type: ("content_type_path",),
+            ContentTypeActionType.define_attribute: (
+                "content_type_path",
+                "name",
+                "attribute_type",
+            ),
+            ContentTypeActionType.undefine_attribute: ("content_type_path", "name"),
+        }
+        missing = [f for f in needed[self.action] if not getattr(self, f)]
+        if missing:
+            raise ValueError(f"{self.action} needs {', '.join(missing)}")
+        # ponytail: `AttributeType` only, which a StrEnum makes cover the canonical
+        # strings too. The API additionally accepts the multi_select/multiselect/
+        # rich_text/richtext aliases; those reach its 422. Matching them here would
+        # mean hand-keeping a copy of a vocabulary we don't own, to save a round
+        # trip for a caller who deliberately went around the enum.
+        if (
+            self.action == ContentTypeActionType.define_attribute
+            and self.attribute_type
+            in (AttributeType.select, AttributeType.multi_select)
+            and not self.choices
+        ):
+            raise ValueError(f"{self.attribute_type} needs choices")
+        return self
+
+    @classmethod
+    def adopt(cls, paths: _list[str]) -> ContentTypeAction:
+        """Import starter trees, the batch form of `ContentType.adopt()`.
+
+        Args:
+            paths: Template root paths to import, e.g. `["legal", "finance"]`
+                (see `ContentType.templates()`).
+
+        Returns:
+            The action, unsent.
+        """
+        return cls(action=ContentTypeActionType.adopt, content_types=paths)
+
+    @classmethod
+    def define(
+        cls,
+        code: str,
+        label: str,
+        *,
+        parent: ContentType | str | None = None,
+        description: str | None = None,
+        inherit_attributes: bool | None = None,
+    ) -> ContentTypeAction:
+        """Create or update a node, the batch form of `ContentType.define()`.
+
+        Args:
+            code: This node's own segment, lowercase alphanumeric with hyphens.
+            label: Human-readable label.
+            parent: Parent node or path; omit for a root node.
+            description: Optional free-text description.
+            inherit_attributes: Whether children inherit this node's attributes
+                (server default True).
+
+        Returns:
+            The action, unsent.
+        """
+        return cls(
+            action=ContentTypeActionType.define_content_type,
+            code=code,
+            label=label,
+            parent_path=_path(parent) if parent is not None else None,
+            description=description,
+            inherit_attributes=inherit_attributes,
+        )
+
+    @classmethod
+    def undefine(cls, content_type: ContentType | str) -> ContentTypeAction:
+        """Delete a node and its subtree, the batch form of `ContentType.undefine()`.
+
+        Args:
+            content_type: The node to delete (object or path string).
+
+        Returns:
+            The action, unsent.
+        """
+        return cls(
+            action=ContentTypeActionType.undefine_content_type,
+            content_type_path=_path(content_type),
+        )
+
+    @classmethod
+    def define_attribute(
+        cls,
+        content_type: ContentType | str,
+        name: str,
+        attribute_type: AttributeType | str,
+        *,
+        choices: _list[str] | None = None,
+        label: str | None = None,
+        description: str | None = None,
+        required: bool | None = None,
+    ) -> ContentTypeAction:
+        """Add an attribute, the batch form of `ContentType.define_attribute()`.
+
+        Args:
+            content_type: The node to define it on (object or path string).
+            name: Attribute identifier in snake_case.
+            attribute_type: AttributeType, or the equivalent string.
+            choices: Allowed values; **required** for select and multi-select,
+                and rejected by the server for every other type.
+            label: Human-readable label (defaults to a title-cased `name`).
+            description: Optional description.
+            required: Whether the schema requires a value (server default False).
+
+        Returns:
+            The action, unsent.
+
+        Raises:
+            ValueError: If a select/multi-select is missing `choices`, which the
+                API rejects with a 422 anyway, caught here to save the round trip.
+        """
+        return cls(
+            action=ContentTypeActionType.define_attribute,
+            content_type_path=_path(content_type),
+            name=name,
+            attribute_type=attribute_type,
+            choices=choices,
+            label=label,
+            description=description,
+            required=required,
+        )
+
+    @classmethod
+    def undefine_attribute(
+        cls, content_type: ContentType | str, name: str
+    ) -> ContentTypeAction:
+        """Remove an attribute, the batch form of `ContentType.undefine_attribute()`.
+
+        Args:
+            content_type: The node it's defined on (object or path string).
+            name: Attribute identifier to remove.
+
+        Returns:
+            The action, unsent.
+        """
+        return cls(
+            action=ContentTypeActionType.undefine_attribute,
+            content_type_path=_path(content_type),
+            name=name,
+        )
+
+    def _body(self) -> dict[str, Any]:
+        # The one place that knows the wire field names: the single-action
+        # classmethods post exactly this too, so single and batch can't drift.
+        # Every unset field simply stays out, which is what _compact did here
+        # before, and no content-type field is meaningfully null on the wire the
+        # way FacetAction's `value` is, so there is no special case to carry.
+        return self.model_dump(exclude_none=True)
+
+
+class ContentTypeResult(BaseModel):
+    """What one action in a `ContentType.batch()` returned, in request order.
+
+    Every result you receive succeeded: the endpoint fails fast, so a failing
+    action raises (see `LightOnAPIError.index`) and no results come back at all. A
+    returned list is therefore always complete and in order, so `results[i]` is the
+    outcome of `actions[i]`.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: int = Field(
+        description=(
+            "Per-action status: 201 created, 200 already applied/updated, 204 for "
+            "the removals (undefine, undefine_attribute)."
+        )
+    )
+    data: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "What the action returned, None for the 204 verbs. The content-type "
+            "verbs give a node, the attribute ones an attribute definition, and "
+            "adopt the imported roots. Left a raw dict: it differs per verb, so "
+            "there is no one model to validate it into."
+        ),
     )
 
 
