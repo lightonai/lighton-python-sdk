@@ -313,3 +313,115 @@ def test_maintenance_is_not_retried_like_a_429(monkeypatch):
     with pytest.raises(exc.MaintenanceError):
         make_client(handler, rate_limit_retries=3).ask("q")
     assert calls["n"] == 1
+
+
+# --- field-level validation errors ------------------------------------------
+# The top-level `detail` of a 422 is a constant sentence, so every validation
+# failure would otherwise stringify identically and a log of them names nothing.
+# The cause lives in `fields`, which the message and a dedicated attribute both
+# carry now. Parsing happens in the base __init__, so it reaches every subclass.
+
+_VALIDATION_BODY = {
+    "code": 422,
+    "error": "validation_error",
+    "detail": "One or more fields failed validation.",
+    "fields": {"choices": [{"error": "invalid", "detail": "must be a non-empty list"}]},
+}
+
+
+def test_validation_422_names_the_failing_field_in_the_message():
+    client = make_client(lambda req: httpx.Response(422, json=_VALIDATION_BODY))
+
+    with pytest.raises(exc.LightOnAPIError) as excinfo:
+        client.ask("q")
+
+    e = excinfo.value
+    assert str(e) == (
+        "422 Unprocessable Entity: One or more fields failed validation. "
+        "(choices: must be a non-empty list)"
+    )
+    assert e.fields == _VALIDATION_BODY["fields"]  # the code beside it survives
+    assert e.body == _VALIDATION_BODY  # the untouched payload is still there
+
+
+def test_field_errors_join_across_fields_and_causes():
+    body = {
+        "detail": "One or more fields failed validation.",
+        "fields": {
+            "choices": [
+                {"error": "invalid", "detail": "must be a non-empty list"},
+                {"error": "type", "detail": "must contain strings"},
+            ],
+            "title": [{"error": "blank", "detail": "may not be blank"}],
+        },
+    }
+    client = make_client(lambda req: httpx.Response(422, json=body))
+    with pytest.raises(exc.LightOnAPIError) as excinfo:
+        client.ask("q")
+    assert (
+        "(choices: must be a non-empty list, must contain strings; "
+        "title: may not be blank)" in str(excinfo.value)
+    )
+
+
+def test_field_errors_and_the_batch_index_both_land_in_the_message():
+    # Order matters: what went wrong, then which action it went wrong on.
+    body = {**_VALIDATION_BODY, "index": 3}
+    client = make_client(lambda req: httpx.Response(422, json=body))
+    with pytest.raises(exc.LightOnAPIError) as excinfo:
+        client.ask("q")
+    assert str(excinfo.value).endswith("(choices: must be a non-empty list) (action 3)")
+    assert excinfo.value.index == 3
+
+
+def test_an_error_without_fields_is_unchanged():
+    """The no-regression pin: errors that aren't field-level must read as before."""
+    client = make_client(lambda req: httpx.Response(404, json={"detail": "nope"}))
+    with pytest.raises(exc.NotFoundError) as excinfo:
+        client.ask("q")
+    assert str(excinfo.value) == "404 Not Found: nope"
+    assert excinfo.value.fields == {}
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        None,
+        "choices must be a non-empty list",  # a string where a mapping was promised
+        [{"error": "invalid"}],  # a list
+        {"choices": "must be a non-empty list"},  # value is not a list
+        {"choices": ["must be a non-empty list"]},  # entries are not objects
+        {"choices": []},  # nothing to say -> not named at all
+    ],
+)
+def test_malformed_fields_degrade_to_empty_without_breaking_the_error(fields):
+    body = {"detail": "One or more fields failed validation.", "fields": fields}
+    client = make_client(lambda req: httpx.Response(422, json=body))
+    with pytest.raises(exc.LightOnAPIError) as excinfo:
+        client.ask("q")
+    e = excinfo.value
+    assert e.fields == {}
+    assert str(e) == "422 Unprocessable Entity: One or more fields failed validation."
+    assert e.body == body  # raw value preserved
+
+
+def test_a_field_error_without_a_detail_falls_back_to_its_code():
+    # Naming the field with no cause at all would be worse than naming the code.
+    body = {"detail": "invalid", "fields": {"choices": [{"error": "required"}]}}
+    client = make_client(lambda req: httpx.Response(422, json=body))
+    with pytest.raises(exc.LightOnAPIError) as excinfo:
+        client.ask("q")
+    assert "(choices: required)" in str(excinfo.value)
+
+
+def test_field_errors_reach_the_subclasses():
+    # Parsed in the base __init__, so no subclass has to opt in.
+    body = {
+        "detail": "not found",
+        "fields": {"file_id": [{"detail": "does not exist"}]},
+    }
+    client = make_client(lambda req: httpx.Response(404, json=body))
+    with pytest.raises(exc.NotFoundError) as excinfo:
+        client.ask("q")
+    assert excinfo.value.fields == {"file_id": [{"detail": "does not exist"}]}
+    assert "(file_id: does not exist)" in str(excinfo.value)

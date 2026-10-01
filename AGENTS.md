@@ -164,6 +164,24 @@ parsed), `ServerError` (5xx), and `MaintenanceError`.
   `except NotFoundError` for batch callers or fork four ways for one integer, and
   `MaintenanceError` stays the *one* body-keyed mapping. `_index()` tests
   `isinstance(value, int)` rather than truthiness, since index 0 is a real answer.
+- **`LightOnAPIError.fields`** is the 422 envelope's per-field validation errors,
+  `{field: [{error, detail}]}`, `{}` on any other failure. The top-level `detail` of a
+  validation error is a **constant sentence**, so without this every 422 stringifies
+  identically and a log of them names nothing (reported from production: 26 failures,
+  26 identical rows, two unrelated causes). Parsed in the base `__init__` by `_fields()`,
+  same reasoning as `index`: every subclass inherits it and `from_response` stays the
+  single construction point. Also **folded into the message** by `_field_summary()`, as a
+  one-line `(choices: must be a non-empty list; title: may not be blank)` group placed
+  after `detail` and **before** `(action N)`, so the whole error stays one log row and
+  the batch position stays last. Raw passthrough of the wire shape, no curated model:
+  the machine-readable `error` code beside each `detail` is worth keeping, and pydantic
+  in the exception tree could fail validation *while* an error is being built. Every
+  level of `_fields()` is defensive for that reason (unexpected shape degrades to `{}`,
+  never raises), and an entry with no `detail` falls back to its `error` code so a named
+  field always has a cause. Not a new exception class: `fields` rides on 400/422 alike
+  and `MaintenanceError` stays the one body-keyed *mapping*, this is a body-derived
+  *attribute* like `index`. The envelope's `error`/`doc_url`/`code` keys stay unsurfaced;
+  `.body` is the untouched payload and is now documented as such.
 
 ## Resource management: active-record
 

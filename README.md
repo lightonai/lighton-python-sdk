@@ -31,6 +31,7 @@ This SDK wraps the LightOn API. Create an account and get an API key on [console
 - [Content types](#content-types)
 - [API keys](#api-keys)
 - [Client configuration](#client-configuration)
+- [Errors](#errors)
 - [Agent Frameworks](#agent-frameworks)
 
 ## Quick start
@@ -999,10 +1000,11 @@ except LightOnAPIError as e:
     print("already applied:", actions[:e.index])
 ```
 
-`index` is `None` on any non-batch error. Past 50 actions `batch_facets()` raises a
-`ValueError` before the request goes out: split the list yourself rather than have
-the SDK guess where to cut, since chunking would restore the per-chunk reindex the
-endpoint exists to avoid.
+`index` is `None` on any non-batch error. See [Errors](#errors) for the rest of what an
+exception carries, including the per-field causes of a 422. Past 50 actions
+`batch_facets()` raises a `ValueError` before the request goes out: split the list
+yourself rather than have the SDK guess where to cut, since chunking would restore the
+per-chunk reindex the endpoint exists to avoid.
 
 ### Building the taxonomy
 
@@ -1151,6 +1153,68 @@ config = LightOnConfiguration(
 with LightOn(config=config) as client:
     ...
 ```
+
+## Errors
+
+Everything the SDK raises descends from `LightOnError`, so one `except` catches the lot:
+
+```python
+from lighton.exceptions import LightOnError, NotFoundError, RateLimitError
+```
+
+| exception | when |
+| --- | --- |
+| `LightOnError` | base class; catch this to catch everything |
+| `LightOnConnectionError` | the request never reached the API (DNS, timeout, reset) |
+| `MalformedResponseError` | a 2xx body that wasn't valid JSON |
+| `StreamError` | the server sent an `error` event partway through a streamed `ask` |
+| `LightOnAPIError` | any non-2xx response; the parent of everything below |
+| `AuthenticationError` | 401, the API key is missing or wrong |
+| `PermissionDeniedError` | 403, the key is valid but not allowed here |
+| `NotFoundError` | 404 |
+| `RateLimitError` | 429; also carries `retry_after` in seconds, or `None` |
+| `ServerError` | 5xx |
+| `MaintenanceError` | a 503 from a planned window, not a crash; a `ServerError` subclass |
+
+Every `LightOnAPIError` carries four attributes:
+
+| attribute | what it holds |
+| --- | --- |
+| `status_code` | the HTTP status |
+| `body` | the decoded error payload, exactly as the API sent it and never stripped |
+| `fields` | per-field validation errors of a 422, keyed by field name; `{}` otherwise |
+| `index` | the 0-based position of the failing action in a batch request; `None` otherwise |
+
+**`fields` is where a 422 actually explains itself.** Its top-level `detail` is a fixed
+sentence, the same one for every validation failure, so the field name and its cause are
+the part worth logging. They are already in the message, so a bare traceback names the
+offender:
+
+```
+lighton.exceptions.LightOnAPIError: 422 Unprocessable Entity: One or more fields
+failed validation. (choices: must be a non-empty list; title: may not be blank)
+```
+
+and the structured form is there when you want to branch on it rather than print it:
+
+```python
+from lighton.exceptions import LightOnAPIError
+
+try:
+    client.extract(path="contract.pdf", schema=MySchema)
+except LightOnAPIError as e:
+    for name, errors in e.fields.items():
+        for err in errors:
+            print(name, err["error"], err["detail"])
+            # choices invalid must be a non-empty list
+```
+
+Each entry keeps the API's machine-readable `error` code alongside the human `detail`.
+Anything the attributes above don't name is still on `.body`.
+
+Retries are handled for you: connection failures and HTTP 429 are retried per
+[Client configuration](#client-configuration) before any exception reaches you, so a
+`RateLimitError` means the retries were already spent. 5xx is never retried.
 
 ## Agent Frameworks
 
