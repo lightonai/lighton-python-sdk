@@ -42,6 +42,7 @@ from lighton import (
     ExecMode,
     ExternalMetadata,
     FacetAction,
+    FacetScope,
     File,
     LightOn,
     MAX_CONTENT_TYPE_ACTIONS,
@@ -104,12 +105,15 @@ class Ctx:
     stamp: str
     ask_query: str | None
     search_query: str | None
+    scope_model: str | None = None  # names the LLM the `scope` step infers with
     ws: Workspace | None = None
     file: File | None = None
     tag: Tag | None = None
     content_type: ContentType | None = None  # the file stays classified as this
     other_content_type: ContentType | None = None  # a leaf it is NOT classified as
     attribute_filter: str | None = None  # an `attribute=` entry that should match
+    seeded_roots: list[str] = field(default_factory=list)  # roots _seed_taxonomy made
+    resolved_scope: FacetScope | None = None  # what the `scope` step resolved
     topic: str | None = None  # derived once by _topic(), cached here
     cleanup: list[Callable[[], object]] = field(default_factory=list)
 
@@ -323,14 +327,38 @@ def _seed_taxonomy(c: Ctx) -> list[ContentType]:
     cascades the subtree, so one per root is enough).
     """
     code = f"e2e-{c.stamp}"  # codes are lowercase alphanumeric + hyphens, server-side
-    for suffix in ("", "-other"):
-        root = ContentType.define(
-            c.client, code + suffix, f"E2E {c.stamp}{suffix}", description="SDK e2e run"
-        )
+    # The labels and descriptions carry real meaning on purpose: `scope()` *ranks
+    # the taxonomy against a question*, so a tree labelled "E2E <stamp>" gives the
+    # scorer nothing to rank and every scope assertion would be flaky — on exactly
+    # the empty tenants that need seeding. The two roots are deliberately about
+    # different subjects, which is what makes `other_content_type` a real negative.
+    # Codes stay stamped: teardown keys on them, and undefine cascades, so it must
+    # only ever reach a root this run created.
+    for suffix, label, about in (
+        (
+            "",
+            "Technical Documentation",
+            "Maintenance manuals, technical orders, service bulletins and "
+            "incident reports.",
+        ),
+        (
+            "-other",
+            "Financial Statements",
+            "Invoices, balance sheets, quarterly earnings and audit reports.",
+        ),
+    ):
+        root = ContentType.define(c.client, code + suffix, label, description=about)
         # undefine cascades, so the root takes its children and attributes with it.
         c.cleanup.append(lambda path=root.path: ContentType.undefine(c.client, path))
+        c.seeded_roots.append(root.path)
 
-    child = ContentType.define(c.client, "child", "Child", parent=code)
+    child = ContentType.define(
+        c.client,
+        "child",
+        "Incident Reports",
+        parent=code,
+        description="Fault and incident reports filed against equipment.",
+    )
     attr = ContentType.define_attribute(
         c.client, code, "e2e_marker", AttributeType.text
     )
@@ -348,7 +376,13 @@ def _seed_taxonomy(c: Ctx) -> list[ContentType]:
     results = ContentType.batch(
         c.client,
         [
-            ContentTypeAction.define("batched", "Batched", parent=code),
+            ContentTypeAction.define(
+                "batched",
+                "Service Bulletins",
+                parent=code,
+                description="Manufacturer service bulletins and airworthiness "
+                "directives.",
+            ),
             # a raw dict stays a valid entry, the escape hatch both batches share
             {
                 "action": "define_attribute",
@@ -457,6 +491,261 @@ def facet_batch(c: Ctx) -> None:
         _say(f"over {MAX_FACET_ACTIONS} actions: refused client-side, no round trip")
     else:
         raise AssertionError(f"{MAX_FACET_ACTIONS + 1} actions should be refused")
+
+
+@step
+def scope(c: Ctx) -> None:
+    """content-types/scope: the three modes, the wire shapes, the knobs.
+
+    Scores whatever taxonomy the account already has; run it after the
+    `content_types` step if you want something guaranteed to be there. The offline
+    suite already pins the client side (what gets sent, what `scope=` means), so
+    everything here is a *server* contract: shapes the curated models bet on, and
+    knobs only the live endpoint can honour.
+    """
+    query = c.search_query or _topic(c)
+
+    # Prompt mode: no model, so no completion, just the prompt to run yourself.
+    resolved = ContentType.scope(c.client, query)
+    c.resolved_scope = resolved
+    hits = resolved.content_types
+    _say(
+        f"scope({query!r}) → has_signal={resolved.has_signal}, "
+        f"{len(hits)} content type(s)"
+    )
+    assert resolved.completion is None, (
+        "no model= was passed, so there is no completion"
+    )
+    if not hits:
+        _say(
+            "nothing scored — run with --only content_types --only scope",
+            typer.colors.YELLOW,
+        )
+        return
+    # prompt_context describes the types that scored, so it's only guaranteed once
+    # something did — an empty taxonomy is a skipped step, not a bug.
+    assert resolved.prompt_context, "prompt mode must return a prompt_context"
+    for hit in hits[:3]:
+        _say(f"  {hit.score:.2f}  {hit.path}  ({hit.doc_count} doc(s))")
+
+    # prompt_version identifies the prompt that was built, as a `t:<template>.d:<data>`
+    # pair. Deliberately *not* asserted stable across two identical calls: the
+    # docstring's claim is one-directional ("same value means the same prompt was
+    # built"), not the converse. The `d:` half hashes the taxonomy behind the
+    # prompt, which moves on a live tenant between two requests — doc counts shift,
+    # retrieval reorders — so equality here would be a flake, not a contract.
+    assert resolved.prompt_version, "prompt mode must return a prompt_version"
+    _say(f"prompt_version: {resolved.prompt_version}")
+
+    _assert_attribute_shapes(c, resolved)
+    _assert_group_coherence(resolved)
+
+    # --- the knobs, which only the live endpoint can honour -------------------
+    if len(hits) > 1:
+        capped = ContentType.scope(c.client, query, max_results=1)
+        assert len(capped.content_types) <= 1, (
+            f"max_results=1 returned {len(capped.content_types)} content type(s)"
+        )
+        _say(f"max_results=1 → {len(capped.content_types)} hit (from {len(hits)})")
+
+    # threshold gates has_signal, and 0 disables the gate outright. `_compact`
+    # drops None and not falsiness, so the 0 really does reach the server.
+    opened = ContentType.scope(c.client, query, threshold=0)
+    assert opened.has_signal, "threshold=0 disables the gate, has_signal stayed False"
+    shut = ContentType.scope(c.client, query, threshold=1e9)
+    assert not shut.has_signal, "nothing scores above 1e9, has_signal should be False"
+    _say("threshold: 0 → has_signal, 1e9 → no signal")
+
+    # Catalog mode: skip scoring entirely, and ignore max_results/threshold while
+    # doing it. Distinct from the no-query form below, which still scores.
+    catalog = ContentType.scope(
+        c.client, query, relevance_scoring=RelevanceScoring.none, max_results=1
+    )
+    assert catalog.content_types, "catalog mode returned no content types"
+    assert all(ct.score == 0 for ct in catalog.content_types), (
+        f"catalog mode should score 0: {[ct.score for ct in catalog.content_types[:5]]}"
+    )
+    if len(hits) > 1:
+        assert len(catalog.content_types) > 1, (
+            "catalog mode should ignore max_results, but it capped at 1"
+        )
+    _say(f"relevance_scoring=none → {len(catalog.content_types)} type(s), all score 0")
+
+    # No query at all: the full schema, what you bake into a system prompt.
+    everything = ContentType.scope(c.client)
+    assert everything.content_types, "the no-query catalog came back empty"
+    assert everything.prompt_context, "the no-query catalog carries no prompt_context"
+    _say(f"scope() with no query → {len(everything.content_types)} content type(s)")
+
+    # The file is classified under c.content_type, so if that type scored at all
+    # the server must count it. Conditional on scoring: a swapped --docs corpus
+    # legitimately may not surface it, and that is not an SDK failure.
+    ct = c.content_type
+    if ct is not None:
+        scored = next((h for h in hits if h.path == ct.path), None)
+        if scored is None:
+            _say(f"{ct.path} did not score for this query", typer.colors.YELLOW)
+        else:
+            assert scored.doc_count >= 1, (
+                f"{ct.path} has a classified file but reports {scored.doc_count} doc(s)"
+            )
+            _say(f"{ct.path} scored {scored.score:.2f}, {scored.doc_count} doc(s)")
+
+
+def _assert_attribute_shapes(c: Ctx, resolved: FacetScope) -> None:
+    """The bet the curated models make: hits carry real `Attribute` definitions.
+
+    The OpenAPI schema types `ScoredContentType.attributes` as free-form `object[]`,
+    which is why `ScopedContentType` is curated to reuse `Attribute` instead of
+    being generated. `extra="ignore"` means a wire drift lands as *blank* Attributes
+    rather than an error, so only asserting on the contents can catch it.
+    """
+    attrs = [(hit.path, a) for hit in resolved.content_types for a in hit.attributes]
+    if not attrs:
+        _say("no scored type carries attributes, shapes unchecked", typer.colors.YELLOW)
+        return
+
+    for path, a in attrs:
+        assert a.name, f"{path} returned an attribute with no name"
+        assert a.type is not None, f"{path}.{a.name} came back with no type"
+        # Definitions, not a file's values: `value` is always None on a scope hit.
+        assert a.value is None, f"{path}.{a.name} carries a value ({a.value!r})"
+    _say(f"{len(attrs)} attribute definition(s), all named, typed and unvalued")
+
+    # The seeded select pins `choices` exactly. On a tenant we didn't seed there's
+    # no attribute we know the answer for, so the loop above is all there is.
+    if not c.seeded_roots:
+        _say(
+            "tenant has its own taxonomy, so nothing was seeded: `choices` unchecked",
+            typer.colors.YELLOW,
+        )
+        return
+    sel = next((a for _, a in attrs if a.name == "e2e_region"), None)
+    if sel is None:
+        _say("the seeded select did not score, choices unchecked", typer.colors.YELLOW)
+        return
+    assert sel.choices == ["FR", "US"], f"choices came back as {sel.choices!r}"
+    _say(f"seeded select e2e_region kept its choices: {sel.choices}")
+
+
+def _assert_group_coherence(resolved: FacetScope) -> None:
+    """`content_types` is the flattened `groups`, best score first."""
+    flat = [ct for group in resolved.groups for ct in group.content_types]
+    assert sorted(ct.path for ct in flat) == sorted(
+        ct.path for ct in resolved.content_types
+    ), "content_types is not the flattening of groups"
+
+    scores = [ct.score for ct in resolved.content_types]
+    assert scores == sorted(scores, reverse=True), f"hits are not best-first: {scores}"
+
+    for group in resolved.groups:
+        if not group.content_types:
+            continue
+        best = max(ct.score for ct in group.content_types)
+        assert abs(group.max_score - best) < 1e-6, (
+            f"{group.root}: max_score {group.max_score}, best member {best}"
+        )
+        stray = [ct.path for ct in group.content_types if ct.root != group.root]
+        assert not stray, f"{group.root} holds hits rooted elsewhere: {stray}"
+    _say(f"{len(resolved.groups)} group(s) coherent with the flattened hits")
+
+
+@step
+def scope_filters(c: Ctx) -> None:
+    """scope= on search and ask: apply it, then the refusals (needs the `scope` step)."""
+    ws = c.workspace()
+    query = c.search_query or _topic(c)
+    resolved = c.resolved_scope
+    if resolved is None or not resolved.content_types:
+        _say(
+            "no scope resolved — run with --only content_types --only scope "
+            "--only scope_filters",
+            typer.colors.YELLOW,
+        )
+        return
+
+    # A scored hit is a ContentTypeRef: it filters without unwrapping .path.
+    best = resolved.content_types[0]
+    got = c.client.search(
+        query, workspaces=[ws], content_type=[best], max_results=5
+    ).results
+    _say(f"search(content_type=[<hit {best.path}>]) → {len(got)} chunk(s)")
+
+    # scope=True: resolve from this very query, then narrow by what it scored.
+    hits = c.client.search(query, workspaces=[ws], scope=True, max_results=5).results
+    _say(f"search(scope=True) → {len(hits)} chunk(s)")
+
+    # A scope resolved up front is applied as-is, with no second resolution.
+    same = c.client.search(
+        query, workspaces=[ws], scope=resolved, max_results=5
+    ).results
+    _say(f"search(scope=<pre-resolved>) → {len(same)} chunk(s)")
+
+    # ask takes the same scope=, through the same resolve_scope().
+    answered = c.client.ask(query, workspaces=[ws], scope=True, max_results=5)
+    assert answered.answer, "ask(scope=True) returned an empty answer"
+    _say(f"ask(scope=True) → {len(answered.results)} source(s): {answered.answer[:80]}")
+
+    # scope= replaces the explicit filters, it never merges with them. Spelled out
+    # twice rather than looped: a **kwargs splat doesn't type-check against search.
+    try:
+        c.client.search(query, scope=True, content_type=["legal"])
+    except ValueError:
+        _say("scope= with an explicit content_type=: refused client-side")
+    else:
+        raise AssertionError("scope= alongside content_type= should be refused")
+
+    try:
+        c.client.search(query, scope=True, attribute=["region:FR"])
+    except ValueError:
+        _say("scope= with an explicit attribute=: refused client-side")
+    else:
+        raise AssertionError("scope= alongside attribute= should be refused")
+
+    if not c.scope_model:
+        _say("completion mode: skipped, pass --scope-model <model> to exercise it")
+        return
+
+    # Completion mode: the API runs the LLM and hands back the filters it inferred.
+    inferred = ContentType.scope(c.client, query, model=c.scope_model)
+    done = inferred.completion
+    # Also proves the wire really sends `scope_completion`: this is the SDK's one
+    # aliased field, and a fixture can't prove the server side of an alias.
+    assert done is not None, "model= must return a completion (wire: scope_completion)"
+    _say(f"scope(model={c.scope_model!r}) → {inferred.filters()}")
+    if done.warnings:
+        _say(f"  warnings: {done.warnings}", typer.colors.YELLOW)
+    assert done.raw_output, "the completion came back with no raw_output"
+
+    narrowed = inferred.filters()
+    assert set(narrowed) <= {"content_type", "attribute"}, (
+        f"filters() grew a key the verbs don't take: {sorted(narrowed)}"
+    )
+    # An inferred scope outranks has_signal: the model answered, and the retrieval
+    # gate doesn't get to veto it.
+    if done.content_type or done.attribute:
+        assert narrowed, "a completion inferred filters but filters() dropped them"
+        if done.content_type:
+            assert narrowed.get("content_type") == [done.content_type], (
+                f"filters() says {narrowed.get('content_type')}, "
+                f"completion says {done.content_type}"
+            )
+        _say(f"completion outranks has_signal={inferred.has_signal}: {narrowed}")
+
+    # Not asserting on sources: an LLM-inferred filter can legitimately exclude
+    # this corpus, which is a retrieval outcome and not an SDK failure.
+    grounded = c.client.ask(query, workspaces=[ws], scope=inferred, max_results=5)
+    assert grounded.answer, "ask(scope=<inferred>) returned an empty answer"
+    if not grounded.results:
+        _say("ask(scope=<inferred>) grounded on nothing", typer.colors.YELLOW)
+    _say(f"ask(scope=<inferred>) → {len(grounded.results)} source chunk(s)")
+
+    # Catalog + model: infer over the whole taxonomy, not the query-relevant slice.
+    whole = ContentType.scope(
+        c.client, query, model=c.scope_model, relevance_scoring=RelevanceScoring.none
+    )
+    assert whole.completion is not None, "catalog+model must still return a completion"
+    _say(f"catalog+model → {whole.filters()}")
 
 
 @step
@@ -815,6 +1104,11 @@ def main(
         "--search-query",
         help="Query for `search` [default: a phrase from the first document].",
     ),
+    scope_model: str = typer.Option(
+        None,
+        "--scope-model",
+        help="LLM for the `scope` step's completion mode [default: skip it].",
+    ),
     keep: bool = typer.Option(
         False, "--keep", help="Don't delete the workspace/tag/key afterwards."
     ),
@@ -856,7 +1150,7 @@ def main(
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     failures: list[str] = []
     with LightOn() as client:  # reads LIGHTON_API_KEY
-        c = Ctx(client, documents, stamp, ask_query, search_query)
+        c = Ctx(client, documents, stamp, ask_query, search_query, scope_model)
         try:
             for name in chosen:
                 typer.secho(f"\n▶ {name}", fg=typer.colors.CYAN, bold=True)

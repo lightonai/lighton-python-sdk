@@ -253,6 +253,14 @@ resp = client.search(
 are ANDed, `|` ORs within one entry; also `name` (has any value), `name:>value`,
 `name:prefix*`, `name:*text*`.
 
+Don't know the paths, or the query came from a user? `scope=` derives both filters
+from the question itself (also on `ask`), see [resolving the scope from a
+question](#resolving-the-scope-from-a-question):
+
+```python
+resp = client.search("termination clause", scope=True)
+```
+
 `relevance_scoring` tunes the scoring step (applies to `ask` too):
 
 - `.scoring_and_filtering` (default): score, drop chunks below the quality threshold
@@ -812,6 +820,10 @@ questions: a document filed under `legal:contract:nda` also comes back for
 labels with no values. Reach for tags for cross-cutting marks like `confidential`,
 and content types for what a document *is*.
 
+Step 3 assumes you know your taxonomy by heart. When you don't, or when the query
+comes from a user rather than from you, [let the API pick the
+filters](#resolving-the-scope-from-a-question).
+
 ### Browsing the taxonomy
 
 `ContentType.list()` returns the tree (each node has `children`, and `attributes`
@@ -825,6 +837,85 @@ for ct in ContentType.list(client, include_attributes=True):
     for attr in ct.attributes:
         print("  ", attr.name, attr.type, attr.choices)
 ```
+
+### Resolving the scope from a question
+
+`ContentType.scope()` reads a question and ranks the taxonomy against it, so you get
+`content_type=`/`attribute=` filters without hard-coding paths. Pass it a `model` and
+the API runs that LLM for you, returning the filters it inferred:
+
+```python
+from lighton import ContentType, LightOn
+
+with LightOn() as client:
+    scope = ContentType.scope(
+        client,
+        "rejected electronics patents filed in Q1 2023",
+        model="mistral-large-latest",
+    )
+
+    print(scope.filters())
+    # {'content_type': ['patent:electricity'],
+    #  'attribute': ['decision:Rejected', 'filing_date:>=2023-01-01',
+    #                'filing_date:<=2023-03-31']}
+
+    answer = client.ask("why were they rejected", scope=scope)
+```
+
+`scope=` is accepted by both [`ask`](#ask-single-turn-rag) and
+[`search`](#search-retrieval-only-no-generation), and applies the filters for you. It
+also takes `True`, which resolves a scope from that same query with no LLM at all:
+cheaper (one extra request, no generation), and by content type only, since
+inferring attribute filters is what the model is for.
+
+```python
+# no model, no attribute filters, one extra round trip
+client.search("termination clause", scope=True)
+```
+
+`True` is a loose net, not a precise one: with no `model` to pick a winner, it keeps
+*every* content type the endpoint scored — up to its default of 20, weak matches
+included — so on a small taxonomy it may not narrow much at all. Resolve the scope
+yourself when you want a tight filter, and pass that:
+
+```python
+top = ContentType.scope(client, "termination clause", max_results=3)
+client.search("termination clause", scope=top)
+```
+
+Nothing is stored: each call is one stateless inference. What comes back:
+
+| | |
+|---|---|
+| `has_signal` | Whether anything scored above `threshold`. False means narrow nothing. |
+| `content_types` | Every scored content type, best first, with typed `attributes`. |
+| `groups` | The same hits kept in the server's per-tree grouping. |
+| `completion` | The model's inferred scope. `None` unless you passed `model`. |
+| `prompt_context` | An LLM-ready description of the matched schema (see below). |
+| `filters()` | The filters this scope narrows to, `{}` when it narrows nothing. |
+
+Without a `model` you get `prompt_context` instead of a `completion`: a ready-made
+prompt describing the matched content types and their attributes, for running against
+whatever LLM you already have. Omit the query too and you get the whole taxonomy,
+which is what you want baked into a system prompt:
+
+```python
+catalog = ContentType.scope(client)  # no query: the full schema
+system_prompt = f"Available document types:\n{catalog.prompt_context}"
+```
+
+A scored hit carries `.path`, so it goes anywhere a `ContentType` does — every
+parameter that names a content type takes the `ContentTypeRef` union (node, scored
+hit, or path string), so this type-checks as well as it runs:
+
+```python
+best = ContentType.scope(client, "mutual NDA expiring 2025").content_types[0]
+print(best.path, best.score, best.doc_count)
+client.search("termination clause", content_type=[best])
+```
+
+`scope=` refuses to combine with an explicit `content_type=`/`attribute=`: pass the
+scope or the filters, not both, so it is always clear which narrowed the search.
 
 ### Classifying a file
 

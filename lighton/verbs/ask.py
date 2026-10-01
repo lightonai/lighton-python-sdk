@@ -8,17 +8,17 @@ from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from pydantic import BaseModel
 
+from lighton.content_type import ContentTypeRef, FacetScope, resolve_scope
 from lighton.enums import RelevanceScoring
 from lighton.exceptions import StreamError
 from lighton.tag import resolve_ids
 from lighton.types.api import AskResponse
 from lighton.types.events import AskEvent, DoneEvent, SourcesEvent, TokenEvent
-from lighton.utils import _compact, _ids, _paths, as_json_schema
+from lighton.utils import _compact, _ids, as_json_schema
 from lighton.verbs._base import _VerbClient
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
-    from lighton.content_type import ContentType
     from lighton.file import File
     from lighton.tag import Tag
     from lighton.workspace import Workspace
@@ -73,8 +73,9 @@ class AskMixin(_VerbClient):
         workspaces: list[Workspace | int] | None = ...,
         tags: list[Tag | int | str] | None = ...,
         files: list[File | int] | None = ...,
-        content_type: list[ContentType | str] | None = ...,
+        content_type: list[ContentTypeRef] | None = ...,
         attribute: list[str] | None = ...,
+        scope: FacetScope | bool = ...,
         max_results: int | None = ...,
         relevance_scoring: RelevanceScoring | None = ...,
         model: str | None = ...,
@@ -89,8 +90,9 @@ class AskMixin(_VerbClient):
         workspaces: list[Workspace | int] | None = ...,
         tags: list[Tag | int | str] | None = ...,
         files: list[File | int] | None = ...,
-        content_type: list[ContentType | str] | None = ...,
+        content_type: list[ContentTypeRef] | None = ...,
         attribute: list[str] | None = ...,
+        scope: FacetScope | bool = ...,
         max_results: int | None = ...,
         relevance_scoring: RelevanceScoring | None = ...,
         model: str | None = ...,
@@ -104,8 +106,9 @@ class AskMixin(_VerbClient):
         workspaces: list[Workspace | int] | None = None,
         tags: list[Tag | int | str] | None = None,
         files: list[File | int] | None = None,
-        content_type: list[ContentType | str] | None = None,
+        content_type: list[ContentTypeRef] | None = None,
         attribute: list[str] | None = None,
+        scope: FacetScope | bool = False,
         max_results: int | None = None,
         relevance_scoring: RelevanceScoring | None = None,
         model: str | None = None,
@@ -123,13 +126,23 @@ class AskMixin(_VerbClient):
                 must exist. Excludes files.
             files: Restrict to these files (File objects or ids). Excludes
                 workspaces and tags.
-            content_type: Restrict to these content-type paths, ContentType objects
-                or path strings (OR-matched, exact-or-subtree, e.g. "legal" also
-                matches "legal:contract"; wildcards `legal:contract*`, `*nda*`).
+            content_type: Restrict to these content types (nodes, scored hits
+                from `scope()`, or path strings; OR-matched, exact-or-subtree,
+                e.g. "legal" also matches "legal:contract"; wildcards
+                `legal:contract*`, `*nda*`).
             attribute: Restrict by attribute value, e.g.
                 `["fiscal_year:2024|2025", "status:active"]`. Entries are ANDed,
                 `|` ORs within one entry. Also `name` (has any value),
                 `name:>value`, `name:prefix*`, `name:*text*`.
+            scope: Derive `content_type`/`attribute` from the query instead of
+                naming them. True resolves a scope from this query (one extra
+                request, no LLM) and narrows by every content type it scores, up
+                to the endpoint's default 20, so it is a loose net; pass a
+                `ContentType.scope(..., max_results=3)` to narrow harder. A
+                `FacetScope` from `ContentType.scope(..., model=...)` is applied
+                as-is, attribute filters included. That `model` infers the filters
+                and is not this call's `model`, which generates the answer.
+                Refuses to combine with an explicit `content_type`/`attribute`.
             max_results: Chunks to retrieve for context (1–50; server default 10).
             relevance_scoring: RelevanceScoring, .scoring_and_filtering (default),
                 .scoring_only, or .none.
@@ -150,18 +163,24 @@ class AskMixin(_VerbClient):
             and `DoneEvent` (last). Being a generator, nothing is sent until you
             start iterating, so request errors surface on the first step, not
             here. Iterate it fully or close it, so the connection is released.
+            `tags` and `scope` are the exception: they resolve eagerly, here, since
+            the body can't be built without them.
 
         Raises:
             StreamError: If the server reports a failure mid-stream; the answer
                 is incomplete at that point.
+            ValueError: If `scope` is combined with `content_type`/`attribute`.
         """
         tag_ids = resolve_ids(cast("LightOn", self), tags) if tags else None
+        content_type_paths, attribute = resolve_scope(
+            cast("LightOn", self), query, scope, content_type, attribute
+        )
         body = _compact(
             query=query,
             workspace_id=_ids(workspaces),
             tag_id=tag_ids,
             file_id=_ids(files),
-            content_type=_paths(content_type),
+            content_type=content_type_paths,
             attribute=attribute,
             max_results=max_results,
             relevance_scoring=relevance_scoring,
