@@ -401,10 +401,19 @@ def _seed_taxonomy(c: Ctx) -> list[ContentType]:
         f"/{results[1].data['name']}"
     )
 
+    # undefine of an unknown type is an idempotent no-op (204, since 3.16.0), but an
+    # attribute can't hang off a missing node, so action 1 fails with index 1.
+    missing = f"nope:not-a-type-{c.stamp}"
     try:
-        ContentType.batch(c.client, [ContentTypeAction.undefine("nope:not-a-type")])
+        ContentType.batch(
+            c.client,
+            [
+                ContentTypeAction.undefine(missing),
+                ContentTypeAction.define_attribute(missing, "x", "boolean"),
+            ],
+        )
     except LightOnAPIError as e:
-        assert e.index == 0, f"the failing action's position should be 0, got {e.index}"
+        assert e.index == 1, f"the failing action's position should be 1, got {e.index}"
     else:
         raise AssertionError("an unknown content type should have failed the batch")
 
