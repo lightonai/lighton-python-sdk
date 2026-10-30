@@ -7,7 +7,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-10-02T15:45:57.616907Z"
+exclude-newer = "2026-10-27T10:05:18.309662Z"
 exclude-newer-span = "-P3D"
 
 [[package]]
@@ -308,7 +308,7 @@ wheels = [
 
 [[package]]
 name = "lighton-sdk"
-version = "1.3.0"
+version = "1.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
