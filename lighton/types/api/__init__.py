@@ -715,23 +715,47 @@ class NullEnum(RootModel[None]):
     root: None
 
 
-class Page(BaseModel):
+class PageBlock(BaseModel):
     """
-    Canonical per-page document text object.
-
-    Originates with /parse and is reused by /ocr and /files (the latter imports it
-    from here) so a client can switch between live parsing and reading an
-    already-ingested file without reshaping page data. Defined once and reused
-    everywhere — never redefine this shape per app.
-
-    Extensible: future per-page fields (tables, images, confidence, ...) can be
-    added here without breaking callers that only consume ``index`` + ``markdown``.
+    One block of a page's layout. Coordinates are on a 0-1000 grid of the page, origin top-left.
     """
 
-    index: Annotated[
-        int, Field(description="Page number within the document (1-based).")
+    type: Annotated[
+        str,
+        Field(
+            description="Block type: `title`, `section`, `text`, `list`, `caption`, `footnote`, `aside_text`, `header`, `footer`, `page_number`, `table`, `chart`, `formula`, `code` or `image`. Other types may be added; handle an unknown one like `text`."
+        ),
     ]
-    markdown: Annotated[str, Field(description="Page text rendered as Markdown.")]
+    top_left_x: Annotated[
+        int,
+        Field(
+            description="Left edge of the box, in thousandths of the page width (0–1000)."
+        ),
+    ]
+    top_left_y: Annotated[
+        int,
+        Field(
+            description="Top edge of the box, in thousandths of the page height (0–1000)."
+        ),
+    ]
+    bottom_right_x: Annotated[
+        int,
+        Field(
+            description="Right edge of the box, in thousandths of the page width (0–1000)."
+        ),
+    ]
+    bottom_right_y: Annotated[
+        int,
+        Field(
+            description="Bottom edge of the box, in thousandths of the page height (0–1000)."
+        ),
+    ]
+    content: Annotated[
+        str,
+        Field(
+            description="The block's content as Markdown: tables as HTML, formulas as LaTeX, a chart as an HTML table of its data, an image as a short description of it."
+        ),
+    ]
 
 
 class ParseAsyncResponse(BaseModel):
@@ -768,7 +792,7 @@ class ParseError(BaseModel):
 
 class Options(BaseModel):
     """
-    Parse options. Currently supports `{"async": true}` to queue the document.
+    Parse options. Supports `{"async": true}` to queue the document and `{"grounding": true}` to also return each page's layout as `blocks` with bounding boxes.
     """
 
     model_config = ConfigDict(
@@ -779,6 +803,12 @@ class Options(BaseModel):
         Field(
             alias="async",
             description="Queue the document for asynchronous parsing and return 202 with a job id.",
+        ),
+    ] = False
+    grounding: Annotated[
+        bool | None,
+        Field(
+            description="Also return the layout of every page as `blocks`: one block per element of the page, with its type, bounding box and content. A chart comes back as an HTML table of its data, an image as a short description of it. Sync and async."
         ),
     ] = False
 
@@ -790,14 +820,14 @@ class ParseJsonRequest(BaseModel):
     options: Annotated[
         Options | None,
         Field(
-            description='Parse options. Currently supports `{"async": true}` to queue the document.'
+            description='Parse options. Supports `{"async": true}` to queue the document and `{"grounding": true}` to also return each page\'s layout as `blocks` with bounding boxes.'
         ),
     ] = None
 
 
 class Options1(BaseModel):
     """
-    Parse options as a JSON-encoded string. Currently supports `{"async": true}` to queue the document.
+    Parse options. Supports `{"async": true}` to queue the document and `{"grounding": true}` to also return each page's layout as `blocks` with bounding boxes. Pass it as a JSON-encoded string.
     """
 
     model_config = ConfigDict(
@@ -810,6 +840,12 @@ class Options1(BaseModel):
             description="Queue the document for asynchronous parsing and return 202 with a job id.",
         ),
     ] = False
+    grounding: Annotated[
+        bool | None,
+        Field(
+            description="Also return the layout of every page as `blocks`: one block per element of the page, with its type, bounding box and content. A chart comes back as an HTML table of its data, an image as a short description of it. Sync and async."
+        ),
+    ] = False
 
 
 class ParseMultipartRequest(BaseModel):
@@ -817,7 +853,7 @@ class ParseMultipartRequest(BaseModel):
     options: Annotated[
         Options1 | None,
         Field(
-            description='Parse options as a JSON-encoded string. Currently supports `{"async": true}` to queue the document.'
+            description='Parse options. Supports `{"async": true}` to queue the document and `{"grounding": true}` to also return each page\'s layout as `blocks` with bounding boxes. Pass it as a JSON-encoded string.'
         ),
     ] = None
 
@@ -829,10 +865,6 @@ class ParseProgress(BaseModel):
 
     percentage: Annotated[int, Field(description="Completion percentage [0, 100].")]
     pages_processed: Annotated[int, Field(description="Pages parsed so far.")]
-
-
-class ParseResult(BaseModel):
-    pages: list[Page]
 
 
 class ParseUsage(BaseModel):
@@ -925,6 +957,35 @@ class PatchedFileUpdateRequestSerializerV3(BaseModel):
             description="External source metadata to create or update. `external_id` is required when no external metadata record exists yet. Fields in `additional_metadata` are merged (not replaced) with existing values."
         ),
     ] = None
+
+
+class Type(StrEnum):
+    googledrive = "googledrive"
+    sharepoint = "sharepoint"
+    servicenow = "servicenow"
+    webscrapper = "webscrapper"
+    smb = "smb"
+    mail_exchange = "mail_exchange"
+
+
+class PatchedStandardWorkspaceDatasourceOperateV3Request(BaseModel):
+    """
+    Operate the datasource a workspace already has: rotate its credentials, pause or resume it.
+
+    Carries no `filter_criteria` and no `name` on purpose. What a workspace syncs is locked by its
+    first successful sync, so a payload that could restate it is one a caller can get wrong — and
+    `edit_workspace_datasource` purges the collection when it changes, which is never what a
+    credential rotation means.
+
+    `credentials` replaces the whole credential set, as everywhere else: a field left out is
+    cleared, not kept. For SMB that includes `auth_protocol`, so a payload omitting it downgrades
+    a Kerberos source to `negotiate` — read the current values off the `sync` block and send them
+    back. See DAT0003.
+    """
+
+    type: Annotated[Type | None, Field(title="Type")] = None
+    credentials: Annotated[dict[str, Any] | None, Field(title="Credentials")] = None
+    enabled: Annotated[bool | None, Field(title="Enabled")] = None
 
 
 class PendingReprocessEnum(StrEnum):
@@ -1192,6 +1253,7 @@ class StandardWorkspaceDatasourceV3RequestTypeEnum(StrEnum):
     servicenow = "servicenow"
     webscrapper = "webscrapper"
     smb = "smb"
+    mail_exchange = "mail_exchange"
 
 
 class StatusVisionEnum(StrEnum):
@@ -1322,6 +1384,20 @@ class UserRoleEnum(StrEnum):
     viewer = "viewer"
 
 
+class WalkRefusal(BaseModel):
+    """
+    One directory an SMB walk could not enter.
+    """
+
+    path: Annotated[str, Field(description="Share-relative path of the directory.")]
+    reason: Annotated[
+        str,
+        Field(
+            description="Why it was skipped: unreadable, reparse point, cycle or too deep. Empty for a walk that started before the reason was recorded — the path is still accurate."
+        ),
+    ]
+
+
 class WorkspaceDatasourceBrowseV3RequestTypeEnum(StrEnum):
     googledrive = "googledrive"
     sharepoint = "sharepoint"
@@ -1351,6 +1427,26 @@ class WorkspaceMemberRoleEnum(StrEnum):
     owner = "owner"
 
 
+class WorkspaceRefusals(BaseModel):
+    """
+    Every directory the current walk could not enter. SMB only.
+    """
+
+    refusals: list[WalkRefusal]
+    count: Annotated[
+        int,
+        Field(
+            description="How many there are. Equals len(refusals): a walk records at most 200 directories."
+        ),
+    ]
+    incomplete: Annotated[
+        bool,
+        Field(
+            description="True once the walk stopped recording skipped directories. Deletion detection is then off for this import, and this list is not the whole story."
+        ),
+    ]
+
+
 class WorkspaceScopedAPIKey(BaseModel):
     """
     An API key that can access a single workspace, seen from the workspace side.
@@ -1376,25 +1472,116 @@ class WorkspaceSummary(BaseModel):
     summary: str
 
 
-class WorkspaceSync(BaseModel):
-    datasource_type: str
-    source_name: str
-    last_status: str
-    updated_at: AwareDatetime | None
-    failed_files_count: int
-    next_import_date: AwareDatetime | None
-    editable: bool
-    name: str
-    instance_url: str | None
-    tenant_id: str
-    site_name: str
-    client_id: str
-    filter_criteria: Any
+class WorkspaceSyncWalk(BaseModel):
+    """
+    How far the directory walk has got. SMB only — null for every other provider.
+
+    SMB has no changes API, so a sync walks the share in batches that each end deliberately and
+    report SUCCESS. `last_status` therefore reads "success, minutes ago" throughout a first scan
+    that takes days, and cannot tell that apart from a finished one. See DAT0001 §2.
+    """
+
+    complete: Annotated[
+        bool,
+        Field(description="False while the walk still has directories left to visit."),
+    ]
+    started_at: Annotated[
+        AwareDatetime | None,
+        Field(
+            description="When the walk in progress began — not when its last batch ran. Null before the first batch."
+        ),
+    ]
+    pending_directories: Annotated[
+        int,
+        Field(
+            description="Directories the walk has queued and not yet visited. Zero once the walk is complete."
+        ),
+    ]
+    files_seen: Annotated[
+        int,
+        Field(
+            description="Files this walk has processed so far, summed over its batches. Not the workspace's file count, which is the whole corpus: on a re-scan the two diverge completely."
+        ),
+    ]
+    bytes_read: Annotated[
+        int,
+        Field(
+            description="Bytes this walk has pulled off the share so far, summed over its batches."
+        ),
+    ]
+    refused_directories_count: Annotated[
+        int,
+        Field(
+            description="Directories this walk could not enter — unreadable, a junction or DFS link, a loop, or past the depth bound. Their files are absent from the sync and only the file server's administrator can change that. Counted apart from failed files, which are retried on the next walk."
+        ),
+    ]
+    refused_directories: Annotated[
+        list[str],
+        Field(
+            description="Up to 10 of those directories, share-relative. A sample, not the whole list: the walk remembers up to 200 and this block rides on every workspace card."
+        ),
+    ]
+    failed_files: Annotated[
+        int,
+        Field(
+            description="Individual files of the last session that failed, counting files only. The `sync` block's own `failed_files_count` is shared with every other provider and counts session-level notes too, so for SMB it also includes the refused directories below — prefer this one."
+        ),
+    ]
+    refusals_incomplete: Annotated[
+        bool,
+        Field(
+            description="True once the walk ran out of room to record what it skipped. Deletion detection is then off for this import: files removed from the share stay in the workspace, with nothing else reporting it."
+        ),
+    ]
 
 
 class WorkspaceTaxonomy(BaseModel):
     classified_files_rate: float
     root_content_types: list[RootContentTypeEntry]
+
+
+class WorkspaceUserPermissions(BaseModel):
+    """
+    What the caller may do on this workspace, through `/api/v3/workspaces` and `/api/v3/files`.
+    """
+
+    can_upload_files: Annotated[
+        bool,
+        Field(
+            description="Whether the caller may upload files to this workspace. Always false for a synced workspace."
+        ),
+    ]
+    can_delete_files: Annotated[
+        bool,
+        Field(
+            description="Whether the caller may delete files in this workspace. Always false for a synced workspace."
+        ),
+    ]
+    can_edit_workspace: Annotated[
+        bool,
+        Field(description="Whether the caller may update the name and description."),
+    ]
+    can_edit_datasource: Annotated[
+        bool,
+        Field(
+            description="Whether the caller may edit the datasource of this synced workspace. False once a sync has succeeded, since the configuration is then locked, and for a workspace with no datasource."
+        ),
+    ]
+    can_operate_datasource: Annotated[
+        bool,
+        Field(
+            description="(since 3.16.0) Whether the caller may replace this datasource's credentials, or pause and resume its syncing, through PATCH /api/v3/workspaces/{id}/datasource. Unlike can_edit_datasource this stays true once a sync has succeeded: the lock covers what a workspace syncs, not how it signs in."
+        ),
+    ]
+    can_delete_workspace: Annotated[
+        bool, Field(description="Whether the caller may delete the workspace.")
+    ]
+    can_manage_members: Annotated[
+        bool,
+        Field(
+            description="Whether the caller may list, add and remove workspace members."
+        ),
+    ]
 
 
 class FieldChunkScoresSchema(BaseModel):
@@ -1872,6 +2059,31 @@ class FileFacetBatchRequest(BaseModel):
     ]
 
 
+class Page(BaseModel):
+    """
+    Canonical per-page document text object.
+
+    Originates with /parse and is reused by /ocr and /files (the latter imports it
+    from here) so a client can switch between live parsing and reading an
+    already-ingested file without reshaping page data. Defined once and reused
+    everywhere — never redefine this shape per app.
+
+    Extensible: future per-page fields (tables, images, confidence, ...) can be
+    added here without breaking callers that only consume ``index`` + ``markdown``.
+    """
+
+    index: Annotated[
+        int, Field(description="Page number within the document (1-based).")
+    ]
+    markdown: Annotated[str, Field(description="Page text rendered as Markdown.")]
+    blocks: Annotated[
+        list[PageBlock] | None,
+        Field(
+            description="(since 3.16.0) The page's layout: its blocks in reading order, each with a type, a bounding box and its content. Present only when grounding was requested. Empty for a blank page, and for a page the model returned without its layout, whose text is still in `markdown`."
+        ),
+    ] = None
+
+
 class PaginatedAPIKeyV3ResponseList(BaseModel):
     count: Annotated[int, Field(examples=[123])]
     next: Annotated[
@@ -1894,41 +2106,8 @@ class PaginatedTagListResponseSerializerV3List(BaseModel):
     results: list[TagListResponseSerializerV3]
 
 
-class ParseJobStatus(BaseModel):
-    """
-    Returned by ``GET /api/v3/parse/<id>`` — async parse job status + (once terminal) result.
-
-    Same shape as the sync ``ParseResponseSerializer`` but with completion fields
-    (``result``, ``usage``, ``completed_at``, ``processing_time_ms``,
-    ``document.page_count``) allowed to be null while the job is still in flight,
-    plus an ``error`` block populated only on terminal failure.
-    """
-
-    id: str
-    status: str
-    created_at: AwareDatetime
-    completed_at: AwareDatetime | None
-    processing_time_ms: int | None
-    document: ParseDocument | None
-    result: ParseResult | None
-    usage: ParseUsage | None
-    progress: ParseProgress | None
-    error: ParseError | None
-
-
-class ParseResponse(BaseModel):
-    """
-    Synchronous ``POST /api/v3/parse`` response — the parse completed inline.
-    """
-
-    id: str
-    status: str
-    created_at: AwareDatetime
-    completed_at: AwareDatetime
-    processing_time_ms: int
-    document: ParseDocument
-    result: ParseResult
-    usage: ParseUsage
+class ParseResult(BaseModel):
+    pages: list[Page]
 
 
 class PatchedUpdateAPIKeyV3Request(BaseModel):
@@ -2026,45 +2205,6 @@ class StandardWorkspaceDatasourceV3Request(BaseModel):
     ] = {}
 
 
-class StandardWorkspaceV3DetailsResponse(BaseModel):
-    """
-    V3 Response serializer for company workspace creation and retrieval.
-    """
-
-    id: int
-    name: str
-    workspace_type: str
-    document_upload_method: str
-    description: str
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
-    files_count: int
-    user_role: UserRoleEnum | BlankEnum
-    used_storage: float
-    summaries: list[WorkspaceSummary]
-    sync: WorkspaceSync | None
-    scoped_api_keys: list[WorkspaceScopedAPIKey]
-
-
-class StandardWorkspaceV3ListResponse(BaseModel):
-    """
-    V3 Response serializer for user-level workspaces endpoint.
-    """
-
-    id: int
-    name: str
-    workspace_type: str
-    document_upload_method: str
-    description: str
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
-    files_count: int
-    user_role: UserRoleEnum | BlankEnum
-    sync: WorkspaceSync | None
-    scoped_api_keys: list[WorkspaceScopedAPIKey]
-    taxonomy: WorkspaceTaxonomy | None
-
-
 class TemplateListResponse(BaseModel):
     content_types: Annotated[list[TemplateRootNode], Field(title="Content Types")]
     playbooks: Annotated[dict[str, Any] | None, Field(title="Playbooks")] = None
@@ -2109,6 +2249,74 @@ class WorkspaceDatasourceBrowseV3Response(BaseModel):
     """
 
     folders: list[BrowseFolderItem]
+
+
+class WorkspaceSync(BaseModel):
+    """
+    Hand-written schema twin of `authentication.schemas.WorkspaceSync` — see the note above.
+    """
+
+    datasource_type: str
+    source_name: str
+    last_status: str
+    updated_at: AwareDatetime | None
+    failed_files_count: Annotated[
+        int,
+        Field(
+            description="Errors on the last import session. Counts every error entry, including notes about the session as a whole — an SMB directory the walk could not enter, a deletion sweep that declined to run — so it is not a count of files alone. For SMB, `walk.failed_files` is the files-only figure; the difference between the two is the refused directories."
+        ),
+    ]
+    pending_files_count: int
+    credentials_rejected: Annotated[
+        bool,
+        Field(
+            description="(since 3.16.0) True when the last session failed because the source refused the credentials themselves. Syncing has stopped and is not retried automatically — each attempt counts towards the account's lockout — so it resumes only once the credentials are replaced through PATCH /api/v3/workspaces/{id}/datasource."
+        ),
+    ]
+    next_import_date: AwareDatetime | None
+    editable: bool
+    name: str
+    instance_url: str | None
+    tenant_id: str
+    site_name: str
+    client_id: str
+    username: Annotated[
+        str,
+        Field(
+            description="(since 3.16.0) Account name (SMB, ServiceNow). Never a secret. Empty where the type has none."
+        ),
+    ]
+    auth_protocol: Annotated[
+        str,
+        Field(
+            description="(since 3.16.0) SMB only: `negotiate`, `ntlm` or `kerberos`. Empty for every other type. Editing a datasource replaces its whole connection, so a client that omits this on a write downgrades a Kerberos source to `negotiate`, which falls back to NTLM. Read it here and send it back unchanged."
+        ),
+    ]
+    kerberos_realm: Annotated[
+        str,
+        Field(
+            description="(since 3.16.0) SMB only: the Kerberos realm. Empty for other types."
+        ),
+    ]
+    kerberos_kdcs: Annotated[
+        str,
+        Field(
+            description="(since 3.16.0) SMB only: the realm's key distribution centres, comma-separated."
+        ),
+    ]
+    connect_address: Annotated[
+        str,
+        Field(
+            description="(since 3.16.0) SMB only: where the connection is opened when the server name in instance_url does not resolve from our network. That name still names the Kerberos ticket."
+        ),
+    ]
+    walk: Annotated[
+        WorkspaceSyncWalk | None,
+        Field(
+            description="(since 3.16.0) Progress of the directory walk. Present for SMB only; null otherwise."
+        ),
+    ]
+    filter_criteria: Any
 
 
 class FieldDatasourceConversionRequest(BaseModel):
@@ -2396,15 +2604,41 @@ class PaginatedFileListResponseSerializerV3List(BaseModel):
     results: list[FileListResponseSerializerV3]
 
 
-class PaginatedStandardWorkspaceV3ListResponseList(BaseModel):
-    count: Annotated[int, Field(examples=[123])]
-    next: Annotated[
-        AnyUrl | None, Field(examples=["http://api.example.org/accounts/?page=4"])
-    ] = None
-    previous: Annotated[
-        AnyUrl | None, Field(examples=["http://api.example.org/accounts/?page=2"])
-    ] = None
-    results: list[StandardWorkspaceV3ListResponse]
+class ParseJobStatus(BaseModel):
+    """
+    Returned by ``GET /api/v3/parse/<id>`` — async parse job status + (once terminal) result.
+
+    Same shape as the sync ``ParseResponseSerializer`` but with completion fields
+    (``result``, ``usage``, ``completed_at``, ``processing_time_ms``,
+    ``document.page_count``) allowed to be null while the job is still in flight,
+    plus an ``error`` block populated only on terminal failure.
+    """
+
+    id: str
+    status: str
+    created_at: AwareDatetime
+    completed_at: AwareDatetime | None
+    processing_time_ms: int | None
+    document: ParseDocument | None
+    result: ParseResult | None
+    usage: ParseUsage | None
+    progress: ParseProgress | None
+    error: ParseError | None
+
+
+class ParseResponse(BaseModel):
+    """
+    Synchronous ``POST /api/v3/parse`` response — the parse completed inline.
+    """
+
+    id: str
+    status: str
+    created_at: AwareDatetime
+    completed_at: AwareDatetime
+    processing_time_ms: int
+    document: ParseDocument
+    result: ParseResult
+    usage: ParseUsage
 
 
 class PatchedUpdateWorkspaceV3Request(BaseModel):
@@ -2463,6 +2697,51 @@ class SearchResultItem(BaseModel):
     ] = None
 
 
+class StandardWorkspaceV3DetailsResponse(BaseModel):
+    """
+    V3 Response serializer for company workspace creation and retrieval.
+    """
+
+    id: int
+    name: str
+    workspace_type: str
+    document_upload_method: str
+    description: str
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+    files_count: int
+    user_role: UserRoleEnum | BlankEnum
+    user_permissions: Annotated[
+        WorkspaceUserPermissions,
+        Field(
+            description="The caller's permissions on this workspace, including the limit of a workspace-scoped API key."
+        ),
+    ]
+    used_storage: float
+    summaries: list[WorkspaceSummary]
+    sync: WorkspaceSync | None
+    scoped_api_keys: list[WorkspaceScopedAPIKey]
+
+
+class StandardWorkspaceV3ListResponse(BaseModel):
+    """
+    V3 Response serializer for user-level workspaces endpoint.
+    """
+
+    id: int
+    name: str
+    workspace_type: str
+    document_upload_method: str
+    description: str
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+    files_count: int
+    user_role: UserRoleEnum | BlankEnum
+    sync: WorkspaceSync | None
+    scoped_api_keys: list[WorkspaceScopedAPIKey]
+    taxonomy: WorkspaceTaxonomy | None
+
+
 class AskResponse(BaseModel):
     results: Annotated[
         list[AskResultItem],
@@ -2474,6 +2753,17 @@ class AskResponse(BaseModel):
         str,
         Field(description="LLM-generated answer grounded in the retrieved results."),
     ]
+
+
+class PaginatedStandardWorkspaceV3ListResponseList(BaseModel):
+    count: Annotated[int, Field(examples=[123])]
+    next: Annotated[
+        AnyUrl | None, Field(examples=["http://api.example.org/accounts/?page=4"])
+    ] = None
+    previous: Annotated[
+        AnyUrl | None, Field(examples=["http://api.example.org/accounts/?page=2"])
+    ] = None
+    results: list[StandardWorkspaceV3ListResponse]
 
 
 class SearchResponse(BaseModel):
