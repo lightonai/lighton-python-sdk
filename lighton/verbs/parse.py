@@ -19,6 +19,7 @@ class ParseMixin(_VerbClient):
         *,
         path: str | Path | None = ...,
         url: str | None = ...,
+        grounding: bool = ...,
         mode: Literal[ExecMode.SYNC] = ...,
     ) -> ParseResponse: ...
     @overload
@@ -27,6 +28,7 @@ class ParseMixin(_VerbClient):
         *,
         path: str | Path | None = ...,
         url: str | None = ...,
+        grounding: bool = ...,
         mode: Literal[ExecMode.ASYNC],
         wait: bool = ...,
         timeout: float = ...,
@@ -36,6 +38,7 @@ class ParseMixin(_VerbClient):
         *,
         path: str | Path | None = None,
         url: str | None = None,
+        grounding: bool = False,
         mode: ExecMode = ExecMode.SYNC,
         wait: bool = False,
         timeout: float = 300.0,
@@ -47,6 +50,11 @@ class ParseMixin(_VerbClient):
             url: A publicly accessible URL to fetch.
 
         Args:
+            grounding: Also return each page's layout as ``page.blocks``: typed
+                blocks in reading order with a bounding box on a 0-1000 grid
+                (origin top-left), charts as HTML tables, images as short
+                descriptions. More than doubles the response size, since each
+                page's text comes back in both ``markdown`` and its blocks.
             mode: ExecMode.SYNC (default) runs inline and returns the full
                 ``ParseResponse``. ExecMode.ASYNC queues the job and returns a
                 ``ParseJob`` handle, call ``.poll()`` until ``.succeeded``.
@@ -69,7 +77,11 @@ class ParseMixin(_VerbClient):
         is_async = mode == ExecMode.ASYNC
         if wait and not is_async:
             raise ValueError("wait=True only applies to mode=ExecMode.ASYNC")
-        options = {"async": True} if is_async else None
+        options: dict[str, bool] = {}
+        if is_async:
+            options["async"] = True
+        if grounding:
+            options["grounding"] = True
         if path is not None:
             path = Path(path)
             # multipart: options rides as a JSON-encoded form field.
