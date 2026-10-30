@@ -352,6 +352,21 @@ One wrinkle: **only `list()` returns `taxonomy`**. The detail endpoint leaves th
 field out, so `get()` and `refresh()` neither populate it nor clear an already-loaded
 value; re-list when you want fresh coverage numbers.
 
+The reverse holds for **`user_permissions`**: only `get()`/`refresh()` return it
+(`list()` leaves it `None`). It says what *you* may do there, a workspace-scoped API
+key's limits included, so check it before an upload instead of catching a 403:
+
+```python
+ws = Workspace.get(client, 7)
+if ws.user_permissions and ws.user_permissions.can_upload_files:
+    ws.ingest(File(path="report.pdf"))
+```
+
+On a synced workspace, `sync.credentials_rejected` means syncing has stopped until
+someone replaces the credentials. For SMB shares, `sync.walk` reports the directory
+walk's progress; read `walk.complete` rather than `last_status`, which says "success"
+after every batch of a scan that can take days.
+
 ## Files & ingestion
 
 Uploading a file into a workspace *is* the ingestion, there's no separate job to

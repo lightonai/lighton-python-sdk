@@ -146,3 +146,59 @@ def test_taxonomy_survives_a_refresh():
 def test_absent_taxonomy_and_sync_are_none():
     [ws] = Workspace.list(_listing({"id": 7, "name": "Docs"}))
     assert ws.taxonomy is None and ws.sync is None and ws.user_role is None
+
+
+def test_sync_parses_smb_walk_and_rejected_credentials():
+    sync = {
+        "datasource_type": "smb",
+        "last_status": "success",  # every batch reports success mid-walk
+        "credentials_rejected": True,
+        "auth_protocol": "kerberos",
+        "walk": {
+            "complete": False,
+            "started_at": "2026-10-01T08:00:00Z",
+            "pending_directories": 12,
+            "files_seen": 340,
+            "bytes_read": 1024,
+            "refused_directories_count": 1,
+            "refused_directories": ["finance/locked"],
+            "failed_files": 0,
+            "refusals_incomplete": False,
+        },
+    }
+    [ws] = Workspace.list(_listing({"id": 7, "name": "Docs", "sync": sync}))
+
+    assert ws.sync is not None and ws.sync.credentials_rejected is True
+    assert ws.sync.auth_protocol == "kerberos"
+    walk = ws.sync.walk
+    assert walk is not None and not walk.complete  # what last_status can't tell you
+    assert walk.refused_directories == ["finance/locked"]
+
+
+def test_user_permissions_come_from_the_detail_endpoint_only():
+    perms = {
+        "can_upload_files": True,
+        "can_delete_files": True,
+        "can_edit_workspace": False,
+        "can_edit_datasource": False,
+        "can_operate_datasource": False,
+        "can_delete_workspace": False,
+        "can_manage_members": False,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/7"):
+            return httpx.Response(
+                200, json={"id": 7, "name": "Docs", "user_permissions": perms}
+            )
+        return httpx.Response(
+            200, json={"results": [{"id": 7, "name": "Docs"}], "next": None}
+        )
+
+    [ws] = Workspace.list(_make_client(handler))
+    assert ws.user_permissions is None  # list() doesn't carry it
+
+    ws.refresh()
+    assert ws.user_permissions is not None
+    assert ws.user_permissions.can_upload_files
+    assert not ws.user_permissions.can_delete_workspace

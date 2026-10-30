@@ -185,6 +185,8 @@ def workspace(c: Ctx) -> None:
     ws.save()
     ws.refresh()
     assert ws.description == "renamed by e2e", "save() did not persist"
+    perms = ws.user_permissions
+    assert perms and perms.can_upload_files, "owner should be able to upload"
     _say("list / get / save / refresh ok")
 
 

@@ -30,6 +30,7 @@ lighton/
   types/             # PURE DATA schemas only (no behavior)
     client/configuration.py   # LightOnConfiguration
     batch.py                  # BatchIngest / BatchProgress / FailedIngest (batch results)
+    workspace.py              # WorkspaceTaxonomy / WorkspaceSync / SyncWalk / WorkspacePermissions
     api/__init__.py           # GENERATED pydantic models (do not hand-edit)
 tests/               # pytest (offline, MockTransport)
   e2e/cli.py         # live-API smoke CLI (typer), NOT collected by pytest: make e2e
@@ -66,6 +67,18 @@ a field whose full domain is known, `workspace_type`/`document_upload_method` st
   `refresh()` preserves an already-loaded taxonomy instead of clearing it. A test
   pins that, since it is exactly the kind of thing a future `_absorb` change would
   silently break. `scoped_api_keys` is the one list field still unmodelled.
+- **`user_permissions` is the mirror image: detail-only.** `WorkspacePermissions`
+  (`types/workspace.py`, the seven `can_*` booleans) comes back from `get()`/`refresh()`
+  and is absent from the list payload, so `list()` leaves it `None`; same `_absorb`
+  rule, opposite endpoint. It is the caller's effective rights *including* a scoped
+  key's limits, which is why it beats catching a 403.
+- **`WorkspaceSync` mirrors the whole sync block**, connection config included
+  (`username`/`auth_protocol`/`kerberos_*`/`connect_address` sit beside the existing
+  `tenant_id`/`site_name`/`client_id`), plus `credentials_rejected` and the SMB-only
+  `walk` (`SyncWalk`). `walk.complete` exists because an SMB walk reports `success`
+  after every batch, so `last_status` can't tell a days-long first scan from a finished
+  one; `walk.failed_files` is the files-only count, `failed_files_count` also counts
+  refused directories.
 
 ## Client
 
