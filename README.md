@@ -284,6 +284,19 @@ for page in doc.result.pages:
 Large documents can time out synchronously, run them async and poll (see
 [Async jobs & polling](#async-jobs--polling)): `client.parse(path="big.pdf", mode=ExecMode.ASYNC)`.
 
+Pass `grounding=True` to also get each page's **layout**: `page.blocks`, in reading
+order, each with a `type` (`title`, `text`, `table`, `chart`, `image`, ...), a bounding
+box on a 0-1000 grid of the page (origin top-left), and its `content`. Charts come back
+as HTML tables of their data and images as short descriptions. It works in both modes,
+and more than doubles the response, since every page's text rides in `markdown` *and* its
+blocks.
+
+```python
+doc = client.parse(path="report.pdf", grounding=True)
+for block in doc.result.pages[0].blocks or []:
+    print(block.type, (block.top_left_x, block.top_left_y), block.content[:40])
+```
+
 ### `extract`: schema-guided structured data
 
 Pull specific, typed fields out of a document for a custom pipeline: you describe the

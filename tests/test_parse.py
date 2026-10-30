@@ -116,3 +116,36 @@ def test_parse_wait_requires_async_mode():
     with pytest.raises(ValueError, match="wait=True"):
         # wait without ASYNC is also a static error, hence the ignore
         client.parse(url="https://example.com/d.pdf", wait=True)  # ty: ignore[no-matching-overload]
+
+
+def test_parse_grounding_sends_option_and_parses_blocks(tmp_path):
+    f = tmp_path / "d.pdf"
+    f.write_bytes(b"%PDF-1.4")
+    sent = []
+    block = {
+        "type": "title",
+        "top_left_x": 100,
+        "top_left_y": 50,
+        "bottom_right_x": 900,
+        "bottom_right_y": 90,
+        "content": "# Report",
+    }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        sent.append(req.content)
+        body = _parse_body("p3", 8)
+        body["result"] = {
+            "pages": [{"index": 1, "markdown": "# Report", "blocks": [block]}]
+        }
+        return httpx.Response(200, json=body)
+
+    client = make_client(handler)
+    resp = client.parse(url="https://example.com/d.pdf", grounding=True)
+    assert json.loads(sent[0])["options"] == {"grounding": True}
+    [page] = resp.result.pages
+    assert page.blocks is not None and page.blocks[0].type == "title"
+    assert page.blocks[0].bottom_right_x == 900
+
+    # multipart: same options, JSON-encoded as a form field, composed with async
+    client.parse(path=f, grounding=True, mode=ExecMode.ASYNC)
+    assert b'{"async": true, "grounding": true}' in sent[1]

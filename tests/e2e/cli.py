@@ -892,7 +892,7 @@ def stream(c: Ctx) -> None:
 
 @step
 def parse(c: Ctx) -> None:
-    """sync parse → async parse job."""
+    """sync parse → async parse job → grounded parse."""
     doc = c.docs[0]
     pages = c.client.parse(path=doc).result.pages
     assert pages, "sync parse returned no pages"
@@ -901,6 +901,10 @@ def parse(c: Ctx) -> None:
     job = c.client.parse(path=doc, mode=ExecMode.ASYNC, wait=True, timeout=JOB_TIMEOUT)
     assert job.result and job.result.pages, "async parse returned no pages"
     _say(f"async: job {job.id} completed in {job.processing_time_ms}ms")
+
+    grounded = c.client.parse(path=doc, grounding=True).result.pages
+    assert any(p.blocks for p in grounded), "grounding=True returned no blocks"
+    _say(f"grounded: {sum(len(p.blocks or []) for p in grounded)} block(s)")
 
 
 @step
