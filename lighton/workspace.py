@@ -19,7 +19,11 @@ from lighton import batch
 from lighton._active_record import _ActiveRecord
 from lighton.batch import BatchIngest, BatchIngestJob
 from lighton.enums import ExecMode, Role
-from lighton.types.workspace import WorkspaceSync, WorkspaceTaxonomy
+from lighton.types.workspace import (
+    WorkspacePermissions,
+    WorkspaceSync,
+    WorkspaceTaxonomy,
+)
 
 if TYPE_CHECKING:
     from lighton._client import LightOn
@@ -57,6 +61,13 @@ class Workspace(_ActiveRecord):
     user_role: Role | None = Field(
         None,
         description="Your role on this workspace, owner/editor/viewer (read-only).",
+    )
+    user_permissions: WorkspacePermissions | None = Field(
+        None,
+        description=(
+            "What you may do on this workspace (read-only). Only `get()`/"
+            "`refresh()` return it; `list()` leaves it None."
+        ),
     )
     taxonomy: WorkspaceTaxonomy | None = Field(
         None,
